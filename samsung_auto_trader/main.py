@@ -26,7 +26,7 @@ def main():
         logger.info(f"Account: {config.GH_ACCOUNT}")
         logger.info(f"API Base URL: {config.BASE_URL}")
         
-        # Start trading (API auth will be handled by kis_auth internally)
+        # Start trading
         trader.run_trading_loop()
         
     except ValueError as e:
@@ -34,8 +34,12 @@ def main():
         sys.exit(1)
     except Exception as e:
         logger.error(f"Startup error: {e}")
+        import traceback
+        traceback.print_exc()
         sys.exit(1)
 
 
 if __name__ == "__main__":
     main()
+
+

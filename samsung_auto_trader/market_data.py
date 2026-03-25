@@ -1,6 +1,5 @@
 """
 Market data operations for Samsung Electronics.
-Get current price, etc.
 """
 from typing import Optional
 import config
@@ -9,28 +8,25 @@ from logger import setup_logger
 
 logger = setup_logger(__name__)
 
-# Cache for last price check (to avoid excessive API calls)
+# Cache for last price check
 _last_price: Optional[int] = None
 _last_price_bid: Optional[int] = None
 _last_price_ask: Optional[int] = None
 
 
-def get_current_price() -> tuple[int, int, int]:
+def get_current_price() -> tuple:
     """
     Get current market price for Samsung Electronics.
     
     Returns:
         tuple: (current_price, bid_price, ask_price) in KRW
-        
-    Raises:
-        Exception if API call fails or price cannot be retrieved
     """
     client = api_client.get_api_client()
     
-    # Endpoint to get current quotation (현재가 조회)
+    # Endpoint to get current quotation
     path = "/uapi/domestic-stock/v1/quotations/inquire-price"
     
-    # TR_ID for current price inquiry (모의투자)
+    # TR_ID for current price inquiry
     tr_id = "FHKST01010100"
     
     params = {
@@ -42,12 +38,20 @@ def get_current_price() -> tuple[int, int, int]:
         logger.debug(f"Fetching current price for {config.STOCK_CODE}...")
         response = client.get(path, params, tr_id=tr_id)
         
-        # Check for API error
+        # Check for error
         if client.check_response_error(response):
             raise Exception(f"API error: {response}")
         
         # Parse response
-        output = response.get('output', {})
+        output = response if hasattr(response, 'getBody') else response
+        if hasattr(output, 'getBody'):
+            output = output.getBody().output1
+        else:
+            output = output.get('output1', {})
+        
+        if isinstance(output, list):
+            output = output[0]
+        
         current_price = int(output.get('stck_prpr', 0))  # 주식현재가
         bid_price = int(output.get('askp1', 0))          # 매도호가1
         ask_price = int(output.get('bidp1', 0))          # 매수호가1
@@ -70,15 +74,9 @@ def get_current_price() -> tuple[int, int, int]:
         raise
 
 
-def calculate_order_prices(current_price: int) -> tuple[int, int]:
+def calculate_order_prices(current_price: int) -> tuple:
     """
     Calculate buy and sell order prices based on current price.
-    
-    Args:
-        current_price: current market price
-        
-    Returns:
-        tuple: (buy_price, sell_price)
     """
     buy_price = current_price - config.BUY_ORDER_OFFSET
     sell_price = current_price + config.SELL_ORDER_OFFSET
