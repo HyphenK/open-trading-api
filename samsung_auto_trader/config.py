@@ -2,8 +2,9 @@ from __future__ import annotations
 
 import os
 from dataclasses import dataclass
-from datetime import time
+from datetime import datetime, time
 from pathlib import Path
+from zoneinfo import ZoneInfo
 
 from dotenv import load_dotenv
 
@@ -39,6 +40,7 @@ BUY_OFFSET_KRW = 1000
 SELL_OFFSET_KRW = 1000
 DEFAULT_ORDER_QTY = 1
 
+KST = ZoneInfo("Asia/Seoul")
 TRADING_START = time(hour=9, minute=10)
 TRADING_END = time(hour=15, minute=30)
 PRE_MARKET_SLEEP_SECONDS = 60
@@ -66,7 +68,6 @@ class Credentials:
         return "01"
 
 
-
 def load_credentials() -> Credentials:
     raw_account = os.getenv("GH_ACCOUNT", "").strip()
     app_key = os.getenv("GH_APPKEY", "").strip()
@@ -83,7 +84,6 @@ def load_credentials() -> Credentials:
     return Credentials(account_no=account_no, app_key=app_key, app_secret=app_secret)
 
 
-
 def normalize_account(value: str) -> str:
     cleaned = value.strip()
     if cleaned.isdigit() and len(cleaned) == 8:
@@ -96,3 +96,7 @@ def normalize_account(value: str) -> str:
         "GH_ACCOUNT must be either 8 digits (example: 12345678) or 8-2 format "
         "(example: 12345678-01)."
     )
+
+
+def now_kst() -> datetime:
+    return datetime.now(KST)

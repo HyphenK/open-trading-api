@@ -3,8 +3,6 @@ from __future__ import annotations
 import logging
 import time
 from dataclasses import asdict
-from datetime import datetime
-from zoneinfo import ZoneInfo
 
 from account import AccountService, AccountSnapshot
 from config import (
@@ -18,9 +16,10 @@ from config import (
     TARGET_SYMBOL,
     TRADING_END,
     TRADING_START,
+    now_kst,
 )
 from market_data import MarketDataService
-from orders import OrderResult, OrderService
+from orders import OrderResult, OrderService, get_kospi_tick_size, round_price_down_to_tick, round_price_up_to_tick
 
 
 class SamsungTrader:
@@ -40,16 +39,24 @@ class SamsungTrader:
         self.logger.info("Trader booted for %s (%s).", TARGET_NAME, TARGET_SYMBOL)
 
         while True:
-            now = datetime.now(ZoneInfo("Asia/Seoul"))
+            now = now_kst()
             now_t = now.time()
 
             if now_t < TRADING_START:
-                self.logger.info("Trading window not started yet. Waiting until 09:10.")
+                self.logger.info(
+                    "Trading window not started yet. Waiting until %s KST. now=%s",
+                    TRADING_START.strftime("%H:%M"),
+                    now.isoformat(timespec="seconds"),
+                )
                 time.sleep(PRE_MARKET_SLEEP_SECONDS)
                 continue
 
             if now_t >= TRADING_END:
-                self.logger.info("Trading window ended at 15:30. Program will stop.")
+                self.logger.info(
+                    "Trading window ended at %s KST. Program will stop. now=%s",
+                    TRADING_END.strftime("%H:%M"),
+                    now.isoformat(timespec="seconds"),
+                )
                 return
 
             self._run_cycle()
@@ -59,13 +66,26 @@ class SamsungTrader:
         self.logger.info("Starting trade cycle.")
 
         current_price = self.market_data.get_current_price(TARGET_SYMBOL)
-        self.logger.info("Current price: %s KRW", current_price)
+        tick_size = get_kospi_tick_size(current_price)
+        self.logger.info("Current price: %s KRW | inferred_tick_size=%s", current_price, tick_size)
 
         before_snapshot = self.account.get_snapshot(TARGET_SYMBOL)
         self._log_snapshot("Holdings before order", before_snapshot)
 
-        buy_price = max(1, current_price - BUY_OFFSET_KRW)
-        sell_price = current_price + SELL_OFFSET_KRW
+        raw_buy_price = max(1, current_price - BUY_OFFSET_KRW)
+        raw_sell_price = current_price + SELL_OFFSET_KRW
+        buy_price = max(1, round_price_down_to_tick(raw_buy_price))
+        sell_price = round_price_up_to_tick(raw_sell_price)
+
+        self.logger.info(
+            "Price normalized by tick size | current=%s tick=%s raw_buy=%s buy=%s raw_sell=%s sell=%s",
+            current_price,
+            tick_size,
+            raw_buy_price,
+            buy_price,
+            raw_sell_price,
+            sell_price,
+        )
 
         if self._can_place_buy(before_snapshot, buy_price):
             self.logger.info("Buy order request: qty=%s, price=%s", DEFAULT_ORDER_QTY, buy_price)
