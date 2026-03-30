@@ -4,6 +4,7 @@ import logging
 import time
 from dataclasses import asdict
 from datetime import datetime
+from zoneinfo import ZoneInfo
 
 from account import AccountService, AccountSnapshot
 from config import (
@@ -39,7 +40,7 @@ class SamsungTrader:
         self.logger.info("Trader booted for %s (%s).", TARGET_NAME, TARGET_SYMBOL)
 
         while True:
-            now = datetime.now()
+            now = datetime.now(ZoneInfo("Asia/Seoul"))
             now_t = now.time()
 
             if now_t < TRADING_START:
