@@ -106,7 +106,11 @@ class SamsungTrader:
 
         sell_qty = self._sellable_qty(working_snapshot)
         if sell_qty > 0:
-            self.logger.info("Sell order request: qty=%s, price=%s", sell_qty, sell_price)
+            self.logger.info(
+                "Sell order request: qty=%s, price=%s | based_on_sellable_qty_only",
+                sell_qty,
+                sell_price,
+            )
             sell_result = self.orders.place_sell_limit(TARGET_SYMBOL, sell_qty, sell_price)
             self._log_order_result(sell_result)
             self.logger.info(
@@ -118,7 +122,11 @@ class SamsungTrader:
             self._log_snapshot("Holdings after sell", after_sell)
             self._log_execution_guess("sell", working_snapshot, after_sell)
         else:
-            self.logger.info("Sell order skipped: no sellable Samsung shares were found.")
+            self.logger.info(
+                "Sell order skipped: no sellable Samsung shares were found. "
+                "holding=%s",
+                asdict(working_snapshot.holding) if working_snapshot.holding else None,
+            )
 
         self.logger.info("Trade cycle finished.")
 
@@ -132,7 +140,9 @@ class SamsungTrader:
     def _sellable_qty(snapshot: AccountSnapshot) -> int:
         if snapshot.holding is None:
             return 0
-        return max(snapshot.holding.sellable_qty, snapshot.holding.qty, 0)
+        # Use the broker-reported sellable quantity only.
+        # A nonzero holding quantity does not mean the shares are currently sellable.
+        return max(snapshot.holding.sellable_qty, 0)
 
     def _log_snapshot(self, prefix: str, snapshot: AccountSnapshot) -> None:
         holding_dict = asdict(snapshot.holding) if snapshot.holding else None
