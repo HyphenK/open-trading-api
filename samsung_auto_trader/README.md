@@ -26,6 +26,7 @@ samsung_auto_trader/
 ├── logger.py
 ├── main.py
 ├── market_data.py
+├── open_orders.py
 ├── orders.py
 ├── requirements.txt
 ├── token_cache.json      # 실행 후 생성
@@ -42,7 +43,8 @@ samsung_auto_trader/
 - `market_data.py`: 삼성전자 현재가 조회
 - `account.py`: 잔고/보유수량 조회와 응답 파싱
 - `orders.py`: 현금 지정가 매수/매도 주문, 호가단위 보정
-- `trader.py`: 거래 윈도우 제어, 주문 전후 잔고 비교, 실행 여부 추정
+- `open_orders.py`: 당일 미체결 주문 조회와 응답 파싱
+- `trader.py`: 거래 윈도우 제어, 주문 전후 잔고/미체결 상태 표시, 실행 여부 추정
 - `main.py`: 전체 조립 및 실행 진입점
 
 ## 실행 전 준비
@@ -79,13 +81,14 @@ python main.py
 
 1. 현재가 조회
 2. 잔고/보유수량 조회
-3. `현재가 - 1000원` 계산
-4. 계산된 매수가를 **호가단위에 맞게 내림 보정**한 뒤 지정가 매수 주문 시도
-5. 주문 후 잔고 재조회
-6. 보유 수량이 있으면 `현재가 + 1000원` 계산
-7. 계산된 매도가를 **호가단위에 맞게 올림 보정**한 뒤 지정가 매도 주문 시도
-8. 주문 후 잔고 재조회
-9. 다음 폴링까지 대기
+3. 당일 미체결 주문 조회
+4. **현재 보유량 + 미체결 주문 상태 블록** 출력
+5. 미체결 주문이 있으면 이번 사이클의 신규 주문을 건너뜀
+6. `현재가 - 1000원` 계산 후, 매수가를 **호가단위에 맞게 내림 보정**한 뒤 지정가 매수 주문 시도
+7. 주문 후 5초 대기 뒤 잔고/미체결 재조회
+8. 매도가능수량이 있으면 `현재가 + 1000원` 계산 후, 매도가를 **호가단위에 맞게 올림 보정**한 뒤 지정가 매도 주문 시도
+9. 주문 후 5초 대기 뒤 잔고/미체결 재조회
+10. 다음 폴링까지 대기
 
 예를 들어 현재가가 `171450원`으로 조회되고 해당 가격대의 호가단위가 `100원`이면:
 
@@ -127,3 +130,31 @@ python main.py
 
 
 - Post-order balance checks wait 5 seconds before querying the account again to reduce premature balance lookups in the mock environment.
+
+
+## Recent logic change
+
+- Sell orders now use **broker-reported `sellable_qty` only**.
+- Holding quantity alone is no longer treated as immediately sellable.
+- After a buy check, the program refreshes the account snapshot and only places a sell order if `sellable_qty > 0`.
+
+
+## 상태 블록 로그
+
+각 사이클에서 아래 두 항목을 눈에 띄게 한 번에 표시합니다.
+
+- 현재 보유량 (`qty`, `sellable_qty`, `avg_price`)
+- 당일 미체결 주문 (`buy_open`, `sell_open`, 상세 주문 목록)
+
+예시:
+
+```text
+====================================================================
+[STATUS] 2026-04-01 12:34:56 KST
+holding | symbol=005930 qty=19 sellable_qty=0 avg_price=184200
+open_orders | buy_open=1 sell_open=0 total_open=1
+  - side=buy order_no=00950 time=122055 qty=1 filled=0 unfilled=1 price=183900
+====================================================================
+```
+
+미체결 조회는 KIS의 당일 주문/체결 조회 API를 사용하도록 분리해 두었고, 필드명 차이는 `open_orders.py`에 모아 두었습니다.

@@ -7,6 +7,7 @@ from config import MOCK_BASE_URL, load_credentials
 from logger import setup_logging
 from market_data import MarketDataService
 from orders import OrderService
+from open_orders import OpenOrdersService
 from trader import SamsungTrader
 
 
@@ -28,8 +29,9 @@ def main() -> None:
     market_data = MarketDataService(api_client)
     account_service = AccountService(api_client, credentials.cano, credentials.acnt_prdt_cd)
     order_service = OrderService(api_client, credentials.cano, credentials.acnt_prdt_cd)
+    open_orders_service = OpenOrdersService(api_client, credentials.cano, credentials.acnt_prdt_cd)
 
-    trader = SamsungTrader(market_data, account_service, order_service, logger)
+    trader = SamsungTrader(market_data, account_service, order_service, open_orders_service, logger)
     trader.run()
 
 
