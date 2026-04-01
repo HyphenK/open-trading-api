@@ -124,3 +124,6 @@ python main.py
 
 - 현재 구현의 호가단위 함수는 삼성전자처럼 **유가증권시장(KOSPI) 주식**을 기준으로 두었습니다.
 - KIS 응답의 일부 필드명은 계좌/환경별로 달라질 수 있습니다. 이 프로젝트는 샘플 저장소 기준의 필드와 일반적인 KIS 응답 키를 함께 처리하도록 작성했지만, 실제 모의환경 응답을 한 번 확인한 뒤 `account.py`의 파싱 키 후보를 조정하는 것을 권장합니다.
+
+
+- Post-order balance checks wait 5 seconds before querying the account again to reduce premature balance lookups in the mock environment.

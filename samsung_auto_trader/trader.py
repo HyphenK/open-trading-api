@@ -91,6 +91,10 @@ class SamsungTrader:
             self.logger.info("Buy order request: qty=%s, price=%s", DEFAULT_ORDER_QTY, buy_price)
             buy_result = self.orders.place_buy_limit(TARGET_SYMBOL, DEFAULT_ORDER_QTY, buy_price)
             self._log_order_result(buy_result)
+            self.logger.info(
+                "Waiting %s seconds before post-buy balance check.",
+                POST_ORDER_SETTLE_SECONDS,
+            )
             time.sleep(POST_ORDER_SETTLE_SECONDS)
             after_buy = self.account.get_snapshot(TARGET_SYMBOL)
             self._log_snapshot("Holdings after buy", after_buy)
@@ -105,6 +109,10 @@ class SamsungTrader:
             self.logger.info("Sell order request: qty=%s, price=%s", sell_qty, sell_price)
             sell_result = self.orders.place_sell_limit(TARGET_SYMBOL, sell_qty, sell_price)
             self._log_order_result(sell_result)
+            self.logger.info(
+                "Waiting %s seconds before post-sell balance check.",
+                POST_ORDER_SETTLE_SECONDS,
+            )
             time.sleep(POST_ORDER_SETTLE_SECONDS)
             after_sell = self.account.get_snapshot(TARGET_SYMBOL)
             self._log_snapshot("Holdings after sell", after_sell)
