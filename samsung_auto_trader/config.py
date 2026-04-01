@@ -22,12 +22,14 @@ HASHKEY_ENDPOINT = "/uapi/hashkey"
 PRICE_ENDPOINT = "/uapi/domestic-stock/v1/quotations/inquire-price"
 BALANCE_ENDPOINT = "/uapi/domestic-stock/v1/trading/inquire-balance"
 ORDER_CASH_ENDPOINT = "/uapi/domestic-stock/v1/trading/order-cash"
+OPEN_ORDERS_ENDPOINT = "/uapi/domestic-stock/v1/trading/inquire-daily-ccld"
 
 # Verified from the reference repository's domestic stock examples.
 TR_ID_PRICE = "FHKST01010100"
 TR_ID_BALANCE_DEMO = "VTTC8434R"
 TR_ID_ORDER_BUY_DEMO = "VTTC0012U"
 TR_ID_ORDER_SELL_DEMO = "VTTC0011U"
+TR_ID_OPEN_ORDERS_DEMO = "VTTC8001R"
 TR_ID_HASHKEY = "HASH"
 
 MARKET_DIVISION = "J"
@@ -100,3 +102,7 @@ def normalize_account(value: str) -> str:
 
 def now_kst() -> datetime:
     return datetime.now(KST)
+
+
+def today_kst_str() -> str:
+    return now_kst().strftime("%Y%m%d")
