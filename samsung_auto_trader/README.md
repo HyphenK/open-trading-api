@@ -2,62 +2,85 @@
 
 한국투자증권 Open API 모의투자 환경에서 삼성전자(005930)만 대상으로 동작하는 REST 기반 자동매매 예제입니다.
 
+## 이번 버전의 핵심 추가사항
+
+- **재고 관리 한도**: `INITIAL_POSITION=20`, `MIN_POSITION=5`, `MAX_POSITION=40`
+- **장중/재실행 초기화**: 장이 열려 있고 삼성전자 보유 수량이 `INITIAL_POSITION`보다 적으면 시장가로 부족분을 채운 뒤 루프 시작
+- **장 마감 전 정리**: `15:20 KST`부터 미체결 주문 취소 후 매도 가능 수량을 시장가로 정리
+- **장 종료**: `15:30 KST` 이후 자동 종료
+
 ## 특징
 
 - REST API만 사용
 - 모의투자 전용
 - 토큰 same-day 캐시 재사용
-- 과도한 호출을 피하기 위한 보수적 폴링 구조
-- API 레이어와 거래 로직 분리
-- VS Code에서 바로 실행하기 쉬운 단일 폴더 구조
-- 거래 시간은 **한국시간(KST, Asia/Seoul)** 기준으로 판단
-- 주문가는 주문 직전 **호가단위에 맞게 자동 보정**
+- KST(Asia/Seoul) 기준 거래 시간 판정
+- 주문가는 주문 직전 **호가단위 자동 보정**
+- **최대/최소 보유량 제한**
+- **상태 블록 로그**로 보유량과 미체결 주문 한눈에 표시
 
-## 폴더 구조
+## 기본 설정값
 
-```text
-samsung_auto_trader/
-├── .env.example
-├── .gitignore
-├── account.py
-├── api_client.py
-├── auth.py
-├── config.py
-├── logger.py
-├── main.py
-├── market_data.py
-├── open_orders.py
-├── orders.py
-├── requirements.txt
-├── token_cache.json      # 실행 후 생성
-├── trader.py
-└── README.md
-```
+`config.py` 기준:
 
-## 파일별 역할
+- `INITIAL_POSITION = 20`
+- `MIN_POSITION = 5`
+- `MAX_POSITION = 40`
+- `BUY_OFFSET_KRW = 1000`
+- `SELL_OFFSET_KRW = 1000`
+- `CLOSEOUT_START = 15:20`
+- `TRADING_END = 15:30`
 
-- `config.py`: 환경변수, 엔드포인트, TR ID, 거래 시간, 타임존(KST), 폴링 간격, 가격 오프셋 등 공통 설정
-- `logger.py`: 콘솔 + 파일 로깅 설정
-- `auth.py`: 접근토큰 발급/재사용, hashkey 발급
-- `api_client.py`: 공통 HTTP 요청, 재시도, 타임아웃, 공통 헤더 처리
-- `market_data.py`: 삼성전자 현재가 조회
-- `account.py`: 잔고/보유수량 조회와 응답 파싱
-- `orders.py`: 현금 지정가 매수/매도 주문, 호가단위 보정
-- `open_orders.py`: 당일 미체결 주문 조회와 응답 파싱
-- `trader.py`: 거래 윈도우 제어, 주문 전후 잔고/미체결 상태 표시, 실행 여부 추정
-- `main.py`: 전체 조립 및 실행 진입점
+총 투자금 1,000만원에서 삼성전자 주가를 약 20만원으로 가정하면,
 
-## 실행 전 준비
+- 초기 20주 = 약 400만원
+- 최대 40주 = 약 800만원
+- 최대 보유 시 남는 현금 = 약 200만원
 
-### 1) 의존성 설치
+즉 **최대 보유 상태에서도 약 20% 현금 버퍼**가 남도록 잡은 설정입니다.
 
-```bash
-pip install -r requirements.txt
-```
+## 동작 흐름
 
-### 2) 환경변수 설정
+### 1) 장 시작 전/직후
 
-`.env.example`를 복사해서 `.env`를 만든 뒤 값을 채우세요.
+- 09:10 KST 전이면 대기
+- 09:10 KST 이후 첫 진입 시 `INITIAL_POSITION` 점검
+- 보유 수량이 20주보다 적으면 **시장가 매수**로 부족분 충당
+- 이미 20주 이상이면 추가 초기화 없이 본 거래 루프 시작
+
+### 2) 일반 거래 루프
+
+1. 현재가 조회
+2. 잔고 조회
+3. 미체결 주문 조회
+4. 상태 블록 출력
+5. 미체결 주문이 있으면 신규 주문 스킵
+6. 보유 수량이 `MAX_POSITION` 미만이고 현금이 충분하면 지정가 매수 시도
+7. 매수 후 5초 대기 후 재조회
+8. 보유 수량이 `MIN_POSITION` 초과이고 `sellable_qty`가 있으면 지정가 매도 시도
+9. 매도 후 5초 대기 후 재조회
+
+### 3) 마감 전 정리
+
+15:20 KST 이후에는:
+
+1. 미체결 주문 조회
+2. **가능한 주문 취소 요청**
+3. 2초 대기
+4. 잔고 재조회
+5. 매도 가능 수량이 있으면 **시장가 매도**
+6. 15:30 KST까지는 추가 신규 주문 없이 대기
+
+## 중요 메모
+
+- 시장가 주문은 `order-cash` 엔드포인트에서 `ORD_DVSN="01"`로 분리해 두었습니다.
+- 정정/취소 주문은 `order-rvsecncl` 엔드포인트와 취소 TR ID를 `config.py`에 분리해 두었습니다.
+- 계좌/환경에 따라 일부 TR ID나 응답 필드가 다를 수 있으므로, **문제가 생기면 `config.py`의 취소 TR ID/엔드포인트부터 확인**하세요.
+- 미체결 주문 취소에는 주문번호와 주문조직번호(`order_branch`)가 필요할 수 있어, `open_orders.py`에서 함께 파싱합니다.
+
+## 환경변수
+
+`.env` 파일 예시:
 
 ```bash
 GH_ACCOUNT=12345678-01
@@ -65,96 +88,9 @@ GH_APPKEY=your_app_key
 GH_APPSECRET=your_app_secret
 ```
 
-`GH_ACCOUNT`는 `12345678`처럼 8자리만 넣어도 되고, `12345678-01`처럼 8-2 형식으로 넣어도 됩니다.
-
-### 3) 실행
+## 실행
 
 ```bash
+pip install -r requirements.txt
 python main.py
 ```
-
-## 기본 동작
-
-프로그램은 **KST 기준 09:10 ~ 15:30** 사이에만 거래 루프를 돌립니다.
-
-한 사이클의 순서는 다음과 같습니다.
-
-1. 현재가 조회
-2. 잔고/보유수량 조회
-3. 당일 미체결 주문 조회
-4. **현재 보유량 + 미체결 주문 상태 블록** 출력
-5. 미체결 주문이 있으면 이번 사이클의 신규 주문을 건너뜀
-6. `현재가 - 1000원` 계산 후, 매수가를 **호가단위에 맞게 내림 보정**한 뒤 지정가 매수 주문 시도
-7. 주문 후 5초 대기 뒤 잔고/미체결 재조회
-8. 매도가능수량이 있으면 `현재가 + 1000원` 계산 후, 매도가를 **호가단위에 맞게 올림 보정**한 뒤 지정가 매도 주문 시도
-9. 주문 후 5초 대기 뒤 잔고/미체결 재조회
-10. 다음 폴링까지 대기
-
-예를 들어 현재가가 `171450원`으로 조회되고 해당 가격대의 호가단위가 `100원`이면:
-
-- 매수 원시가격: `170450`
-- 실제 매수 주문가: `170400`
-- 매도 원시가격: `172450`
-- 실제 매도 주문가: `172500`
-
-즉, 조회 현재가가 호가 중간값처럼 보여도 주문 직전에 유효 호가로 정규화합니다.
-
-## 안전 관련 메모
-
-이 예제는 **모의투자 전용**입니다.
-
-또한 아래 원칙을 적용했습니다.
-
-- 웹소켓 미사용
-- 주문 직전/직후에만 잔고 재조회
-- 1회 사이클당 불필요한 추가 조회 회피
-- sellable qty가 없으면 매도 주문 생략
-- 토큰은 같은 날 재사용
-- 거래 시간 판정은 UTC가 아니라 **Asia/Seoul** 고정 사용
-
-## 수정하기 쉬운 값
-
-`config.py`에서 아래 값을 쉽게 바꿀 수 있습니다.
-
-- `BUY_OFFSET_KRW`
-- `SELL_OFFSET_KRW`
-- `POLL_INTERVAL_SECONDS`
-- `DEFAULT_ORDER_QTY`
-- `TRADING_START`
-- `TRADING_END`
-
-## 주의
-
-- 현재 구현의 호가단위 함수는 삼성전자처럼 **유가증권시장(KOSPI) 주식**을 기준으로 두었습니다.
-- KIS 응답의 일부 필드명은 계좌/환경별로 달라질 수 있습니다. 이 프로젝트는 샘플 저장소 기준의 필드와 일반적인 KIS 응답 키를 함께 처리하도록 작성했지만, 실제 모의환경 응답을 한 번 확인한 뒤 `account.py`의 파싱 키 후보를 조정하는 것을 권장합니다.
-
-
-- Post-order balance checks wait 5 seconds before querying the account again to reduce premature balance lookups in the mock environment.
-
-
-## Recent logic change
-
-- Sell orders now use **broker-reported `sellable_qty` only**.
-- Holding quantity alone is no longer treated as immediately sellable.
-- After a buy check, the program refreshes the account snapshot and only places a sell order if `sellable_qty > 0`.
-
-
-## 상태 블록 로그
-
-각 사이클에서 아래 두 항목을 눈에 띄게 한 번에 표시합니다.
-
-- 현재 보유량 (`qty`, `sellable_qty`, `avg_price`)
-- 당일 미체결 주문 (`buy_open`, `sell_open`, 상세 주문 목록)
-
-예시:
-
-```text
-====================================================================
-[STATUS] 2026-04-01 12:34:56 KST
-holding | symbol=005930 qty=19 sellable_qty=0 avg_price=184200
-open_orders | buy_open=1 sell_open=0 total_open=1
-  - side=buy order_no=00950 time=122055 qty=1 filled=0 unfilled=1 price=183900
-====================================================================
-```
-
-미체결 조회는 KIS의 당일 주문/체결 조회 API를 사용하도록 분리해 두었고, 필드명 차이는 `open_orders.py`에 모아 두었습니다.

@@ -13,6 +13,7 @@ class OpenOrder:
     side: str
     order_no: str | None
     order_time: str | None
+    order_branch: str | None
     order_price: int
     order_qty: int
     filled_qty: int
@@ -21,12 +22,6 @@ class OpenOrder:
 
 
 class OpenOrdersService:
-    """Query today's order/fill history and keep only unfilled orders.
-
-    Field names in KIS responses can differ slightly by environment, so parsing is
-    intentionally defensive and isolated here.
-    """
-
     def __init__(self, api_client: APIClient, cano: str, acnt_prdt_cd: str) -> None:
         self.api_client = api_client
         self.cano = cano
@@ -39,10 +34,10 @@ class OpenOrdersService:
             "ACNT_PRDT_CD": self.acnt_prdt_cd,
             "INQR_STRT_DT": today,
             "INQR_END_DT": today,
-            "SLL_BUY_DVSN_CD": "00",  # all
-            "INQR_DVSN": "00",  # reverse/latest first (placeholder-friendly)
+            "SLL_BUY_DVSN_CD": "00",
+            "INQR_DVSN": "00",
             "PDNO": symbol,
-            "CCLD_DVSN": "00",  # all
+            "CCLD_DVSN": "00",
             "ORD_GNO_BRNO": "",
             "ODNO": "",
             "INQR_DVSN_3": "00",
@@ -55,22 +50,14 @@ class OpenOrdersService:
         open_orders: list[OpenOrder] = []
         for row in rows:
             order = self._parse_order(row)
-            if order is None:
-                continue
-            if order.symbol != symbol:
-                continue
-            if order.unfilled_qty <= 0:
+            if order is None or order.symbol != symbol or order.unfilled_qty <= 0:
                 continue
             open_orders.append(order)
         return open_orders
 
     @staticmethod
     def _extract_rows(data: dict[str, Any]) -> list[dict[str, Any]]:
-        candidates = [
-            data.get("output1"),
-            data.get("output"),
-            data.get("output2"),
-        ]
+        candidates = [data.get("output1"), data.get("output"), data.get("output2")]
         for candidate in candidates:
             if isinstance(candidate, list):
                 return [row for row in candidate if isinstance(row, dict)]
@@ -93,6 +80,7 @@ class OpenOrdersService:
             side=_infer_side(row),
             order_no=_nullable(_first_str(row, "odno", "ODNO", "ord_no")),
             order_time=_nullable(_first_str(row, "ord_tmd", "ORD_TMD", "order_time")),
+            order_branch=_nullable(_first_str(row, "ord_gno_brno", "ORD_GNO_BRNO", "krx_fwdg_ord_orgno")),
             order_price=_first_int(row, "avg_prvs", "ord_unpr", "ORD_UNPR", "order_price"),
             order_qty=order_qty,
             filled_qty=filled_qty,

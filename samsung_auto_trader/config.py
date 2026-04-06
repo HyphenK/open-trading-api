@@ -22,19 +22,25 @@ HASHKEY_ENDPOINT = "/uapi/hashkey"
 PRICE_ENDPOINT = "/uapi/domestic-stock/v1/quotations/inquire-price"
 BALANCE_ENDPOINT = "/uapi/domestic-stock/v1/trading/inquire-balance"
 ORDER_CASH_ENDPOINT = "/uapi/domestic-stock/v1/trading/order-cash"
+ORDER_REVISE_CANCEL_ENDPOINT = "/uapi/domestic-stock/v1/trading/order-rvsecncl"
 OPEN_ORDERS_ENDPOINT = "/uapi/domestic-stock/v1/trading/inquire-daily-ccld"
 
-# Verified from the reference repository's domestic stock examples.
+# These TR IDs and endpoints are isolated here so they can be adjusted easily if
+# your mock account environment uses a different mapping.
 TR_ID_PRICE = "FHKST01010100"
 TR_ID_BALANCE_DEMO = "VTTC8434R"
 TR_ID_ORDER_BUY_DEMO = "VTTC0012U"
 TR_ID_ORDER_SELL_DEMO = "VTTC0011U"
+TR_ID_ORDER_CANCEL_DEMO = "VTTC0803U"
 TR_ID_OPEN_ORDERS_DEMO = "VTTC8001R"
 TR_ID_HASHKEY = "HASH"
 
 MARKET_DIVISION = "J"
 EXCHANGE_CODE = "KRX"
 ORDER_TYPE_LIMIT = "00"
+ORDER_TYPE_MARKET = "01"
+RVSE_CNCL_CANCEL_CODE = "02"
+QTY_ALL_ORDER_YN = "Y"
 
 TARGET_SYMBOL = "005930"
 TARGET_NAME = "Samsung Electronics"
@@ -42,12 +48,19 @@ BUY_OFFSET_KRW = 1000
 SELL_OFFSET_KRW = 1000
 DEFAULT_ORDER_QTY = 1
 
+# Inventory / capital controls.
+INITIAL_POSITION = 20
+MIN_POSITION = 5
+MAX_POSITION = 40
+
 KST = ZoneInfo("Asia/Seoul")
 TRADING_START = time(hour=9, minute=10)
+CLOSEOUT_START = time(hour=15, minute=20)
 TRADING_END = time(hour=15, minute=30)
 PRE_MARKET_SLEEP_SECONDS = 60
 POLL_INTERVAL_SECONDS = 20
 POST_ORDER_SETTLE_SECONDS = 5
+POST_CANCEL_SETTLE_SECONDS = 2
 REQUEST_TIMEOUT_SECONDS = 10
 MAX_RETRIES = 3
 RETRY_BACKOFF_SECONDS = 1.5
