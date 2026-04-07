@@ -159,28 +159,7 @@ class SamsungTrader:
         )
         open_orders = self._get_open_orders_safe(TARGET_SYMBOL)
         if open_orders:
-            for order in open_orders:
-                if not order.order_no:
-                    self.logger.warning("Skipping cancel for open order without order number: %s", order)
-                    continue
-                self.logger.info(
-                    "Cancel order request | order_no=%s branch=%s side=%s unfilled_qty=%s price=%s",
-                    order.order_no,
-                    order.order_branch,
-                    order.side,
-                    order.unfilled_qty,
-                    order.order_price,
-                )
-                try:
-                    self.orders.cancel_order(
-                        TARGET_SYMBOL,
-                        order.order_no,
-                        order.order_branch,
-                        order.unfilled_qty,
-                        order.order_price,
-                    )
-                except Exception as exc:
-                    self.logger.warning("Cancel order failed for %s: %s", order.order_no, exc)
+            self._cancel_open_orders(open_orders)
         else:
             self.logger.info("No open orders to cancel during closeout.")
 
@@ -217,6 +196,25 @@ class SamsungTrader:
         self._log_snapshot("Holdings before order", before_snapshot)
         self._log_status_block(before_snapshot, open_orders)
 
+        effective_position = self._effective_position(before_snapshot, open_orders)
+        buy_open_qty, _ = self._open_order_qtys(open_orders)
+
+        if effective_position >= MAX_POSITION and buy_open_qty > 0:
+            self.logger.info(
+                "Max position guard triggered. Cancelling open buy orders before skipping buys | effective_position=%s max=%s buy_open_qty=%s",
+                effective_position,
+                MAX_POSITION,
+                buy_open_qty,
+            )
+            self._cancel_open_orders([order for order in open_orders if order.side == "buy"])
+            self.logger.info("Waiting %s seconds after max-guard buy-order cancels.", POST_CANCEL_SETTLE_SECONDS)
+            time.sleep(POST_CANCEL_SETTLE_SECONDS)
+            before_snapshot = self.account.get_snapshot(TARGET_SYMBOL)
+            open_orders = self._get_open_orders_safe(TARGET_SYMBOL)
+            self._log_snapshot("Holdings after max-guard cancel", before_snapshot)
+            self._log_status_block(before_snapshot, open_orders)
+            effective_position = self._effective_position(before_snapshot, open_orders)
+
         if open_orders:
             self.logger.info("Open orders detected for %s. Skipping new orders this cycle.", TARGET_SYMBOL)
             self.logger.info("Trade cycle finished.")
@@ -238,9 +236,10 @@ class SamsungTrader:
         )
 
         working_snapshot = before_snapshot
-        if self._can_place_buy(before_snapshot, buy_price):
-            self.logger.info("Buy order request: qty=%s, price=%s", DEFAULT_ORDER_QTY, buy_price)
-            buy_result = self.orders.place_buy_limit(TARGET_SYMBOL, DEFAULT_ORDER_QTY, buy_price)
+        buy_qty = self._buy_qty_for_cycle(before_snapshot, [], buy_price)
+        if buy_qty > 0:
+            self.logger.info("Buy order request: qty=%s, price=%s", buy_qty, buy_price)
+            buy_result = self.orders.place_buy_limit(TARGET_SYMBOL, buy_qty, buy_price)
             self._log_order_result(buy_result)
             self.logger.info("Waiting %s seconds before post-buy balance check.", POST_ORDER_SETTLE_SECONDS)
             time.sleep(POST_ORDER_SETTLE_SECONDS)
@@ -252,8 +251,9 @@ class SamsungTrader:
             working_snapshot = after_buy
         else:
             self.logger.info(
-                "Buy order skipped: max position reached or available cash was not enough | holding_qty=%s cash_available=%s max_position=%s",
+                "Buy order skipped: max position reached, open buy exposure already counted, or available cash was not enough | holding_qty=%s effective_position=%s cash_available=%s max_position=%s",
                 self._holding_qty(before_snapshot),
+                effective_position,
                 before_snapshot.cash_available,
                 MAX_POSITION,
             )
@@ -284,12 +284,36 @@ class SamsungTrader:
 
         self.logger.info("Trade cycle finished.")
 
+    def _cancel_open_orders(self, open_orders: list[OpenOrder]) -> None:
+        for order in open_orders:
+            if not order.order_no:
+                self.logger.warning("Skipping cancel for open order without order number: %s", order)
+                continue
+            self.logger.info(
+                "Cancel order request | order_no=%s branch=%s side=%s unfilled_qty=%s price=%s",
+                order.order_no,
+                order.order_branch,
+                order.side,
+                order.unfilled_qty,
+                order.order_price,
+            )
+            try:
+                self.orders.cancel_order(
+                    TARGET_SYMBOL,
+                    order.order_no,
+                    order.order_branch,
+                    order.unfilled_qty,
+                    order.order_price,
+                )
+            except Exception as exc:
+                self.logger.warning("Cancel order failed for %s: %s", order.order_no, exc)
+
     def _get_open_orders_safe(self, symbol: str) -> list[OpenOrder]:
         try:
             return self.open_orders.get_open_orders(symbol)
         except Exception as exc:
-            self.logger.warning("Open-order inquiry failed; continuing without blocking orders: %s", exc)
-            return []
+            self.logger.error("Open-order inquiry failed; blocking new orders this cycle: %s", exc)
+            raise
 
     @staticmethod
     def _holding_qty(snapshot: AccountSnapshot) -> int:
@@ -311,13 +335,26 @@ class SamsungTrader:
             return 0
         return max(snapshot.cash_available // unit_price, 0)
 
-    def _can_place_buy(self, snapshot: AccountSnapshot, buy_price: int) -> bool:
+    @staticmethod
+    def _open_order_qtys(open_orders: list[OpenOrder]) -> tuple[int, int]:
+        buy_open = sum(max(order.unfilled_qty, 0) for order in open_orders if order.side == "buy")
+        sell_open = sum(max(order.unfilled_qty, 0) for order in open_orders if order.side == "sell")
+        return buy_open, sell_open
+
+    def _effective_position(self, snapshot: AccountSnapshot, open_orders: list[OpenOrder]) -> int:
         holding_qty = self._holding_qty(snapshot)
-        if holding_qty >= MAX_POSITION:
-            return False
-        if snapshot.cash_available is None:
-            return True
-        return snapshot.cash_available >= buy_price * DEFAULT_ORDER_QTY
+        buy_open, sell_open = self._open_order_qtys(open_orders)
+        return holding_qty + buy_open - sell_open
+
+    def _buy_qty_for_cycle(self, snapshot: AccountSnapshot, open_orders: list[OpenOrder], buy_price: int) -> int:
+        effective_position = self._effective_position(snapshot, open_orders)
+        room = max(MAX_POSITION - effective_position, 0)
+        if room <= 0:
+            return 0
+        affordable = self._affordable_qty(snapshot, buy_price)
+        if affordable <= 0:
+            return 0
+        return min(DEFAULT_ORDER_QTY, room, affordable)
 
     def _sell_qty_for_cycle(self, snapshot: AccountSnapshot) -> int:
         holding_qty = self._holding_qty(snapshot)
@@ -343,14 +380,14 @@ class SamsungTrader:
         qty = holding.qty if holding else 0
         sellable_qty = holding.sellable_qty if holding else 0
         avg_price = holding.avg_price if holding else 0
-        buy_open = sum(order.unfilled_qty for order in open_orders if order.side == "buy")
-        sell_open = sum(order.unfilled_qty for order in open_orders if order.side == "sell")
+        buy_open, sell_open = self._open_order_qtys(open_orders)
+        effective_position = self._effective_position(snapshot, open_orders)
 
         lines = [
             "=" * 68,
             f"[STATUS] {now_kst().strftime('%Y-%m-%d %H:%M:%S %Z')}",
             f"holding | symbol={TARGET_SYMBOL} qty={qty} sellable_qty={sellable_qty} avg_price={avg_price}",
-            f"inventory_limits | initial={INITIAL_POSITION} min={MIN_POSITION} max={MAX_POSITION}",
+            f"inventory_limits | initial={INITIAL_POSITION} min={MIN_POSITION} max={MAX_POSITION} effective_position={effective_position}",
             f"open_orders | buy_open={buy_open} sell_open={sell_open} total_open={len(open_orders)}",
         ]
 
