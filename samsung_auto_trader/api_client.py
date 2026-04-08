@@ -16,6 +16,8 @@ class APIClient:
         self.auth_manager = auth_manager
         self.logger = logger
         self.session = requests.Session()
+        self._last_request_ts = 0.0
+        self.min_request_interval = 1.0  # ← 1초 간격
 
     def get(self, endpoint: str, tr_id: str, params: dict[str, Any]) -> dict[str, Any]:
         return self._request("GET", endpoint, tr_id, params=params)
@@ -23,6 +25,15 @@ class APIClient:
     def post(self, endpoint: str, tr_id: str, body: dict[str, Any], use_hashkey: bool = False) -> dict[str, Any]:
         return self._request("POST", endpoint, tr_id, body=body, use_hashkey=use_hashkey)
 
+    def _throttle(self):
+        now = time.monotonic()
+        elapsed = now - self._last_request_ts
+
+        if elapsed < self.min_request_interval:
+            time.sleep(self.min_request_interval - elapsed)
+
+        self._last_request_ts = time.monotonic()
+    
     def _request(
         self,
         method: str,
@@ -32,6 +43,7 @@ class APIClient:
         body: dict[str, Any] | None = None,
         use_hashkey: bool = False,
     ) -> dict[str, Any]:
+        self._throttle()  # ← 추가
         url = f"{self.base_url}{endpoint}"
         token = self.auth_manager.get_access_token()
 
