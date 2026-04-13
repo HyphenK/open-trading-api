@@ -1,28 +1,34 @@
 from __future__ import annotations
 
 from dataclasses import dataclass
+from datetime import datetime
 from typing import Any
 
-from api_client import APIClient
-from config import OPEN_ORDERS_ENDPOINT, TARGET_SYMBOL, TR_ID_OPEN_ORDERS_DEMO, today_kst_str
+from config import (
+    OPEN_ORDERS_ENDPOINT,
+    TARGET_SYMBOL,
+    TR_ID_OPEN_ORDERS_DEMO,
+    today_kst_str,
+)
 
 
 @dataclass
 class OpenOrder:
     symbol: str
     side: str
-    order_no: str | None
-    order_time: str | None
-    order_branch: str | None
-    order_price: int
+    order_no: str
+    order_branch_no: str
+    order_time: str
+    order_type_name: str
     order_qty: int
     filled_qty: int
     unfilled_qty: int
+    price: int
     raw: dict[str, Any]
 
 
 class OpenOrdersService:
-    def __init__(self, api_client: APIClient, cano: str, acnt_prdt_cd: str) -> None:
+    def __init__(self, api_client, cano: str, acnt_prdt_cd: str):
         self.api_client = api_client
         self.cano = cano
         self.acnt_prdt_cd = acnt_prdt_cd
@@ -36,10 +42,7 @@ class OpenOrdersService:
             "INQR_END_DT": today,
             "SLL_BUY_DVSN_CD": "00",
             "INQR_DVSN": "00",
-            # Query broadly, then filter in Python.
-            # This has been more reliable than requesting a single symbol directly
-            # for inquire-daily-ccld.
-            "PDNO": "",
+            "PDNO": "",  # 전체 조회 후 파이썬에서 종목 필터링
             "CCLD_DVSN": "00",
             "ORD_GNO_BRNO": "",
             "ODNO": "",
@@ -50,10 +53,15 @@ class OpenOrdersService:
             "CTX_AREA_NK100": "",
         }
 
-        data = self.api_client.get(OPEN_ORDERS_ENDPOINT, TR_ID_OPEN_ORDERS_DEMO, params=params)
-        rows = self._extract_rows(data)
+        data = self.api_client.get(
+            OPEN_ORDERS_ENDPOINT,
+            TR_ID_OPEN_ORDERS_DEMO,
+            params=params,
+        )
 
+        rows = data.get("output1", []) or []
         open_orders: list[OpenOrder] = []
+
         for row in rows:
             order = self._parse_order(row)
             if order is None:
@@ -64,19 +72,8 @@ class OpenOrdersService:
                 continue
             open_orders.append(order)
 
-        return open_orders
-
-    @staticmethod
-    def _extract_rows(data: dict[str, Any]) -> list[dict[str, Any]]:
-        candidates = [
-            data.get("output1"),
-            data.get("output"),
-            data.get("output2"),
-        ]
-        for candidate in candidates:
-            if isinstance(candidate, list):
-                return [row for row in candidate if isinstance(row, dict)]
-        return []
+        # 같은 주문번호가 여러 번 내려올 가능성에 대비해 최신 행만 남김
+        return self._dedupe_by_order_no(open_orders)
 
     @staticmethod
     def _parse_order(row: dict[str, Any]) -> OpenOrder | None:
@@ -84,118 +81,103 @@ class OpenOrdersService:
         if not symbol:
             return None
 
-        order_qty = _first_int(row, "ord_qty", "ORD_QTY", "tot_ord_qty", "TOT_ORD_QTY")
-        filled_qty = _first_int(
-            row,
-            "tot_ccld_qty",
-            "TOT_CCLD_QTY",
-            "ccld_qty",
-            "CCLD_QTY",
-        )
-        # Keep this strict: do not use ord_psbl_qty here.
-        # It can behave differently from true remaining quantity and create ghost orders.
-        unfilled_qty = _first_int(
-            row,
-            "rmn_qty",
-            "RMN_QTY",
-            "tot_ccld_rmnd_qty",
-            "TOT_CCLD_RMND_QTY",
-        )
+        side_name = _first_str(row, "sll_buy_dvsn_cd_name", "SLL_BUY_DVSN_CD_NAME")
+        side = _normalize_side(side_name)
+        if not side:
+            return None
+
+        order_no = _first_str(row, "odno", "ODNO")
+        order_branch_no = _first_str(row, "ord_gno_brno", "ORD_GNO_BRNO")
+        order_type_name = _first_str(row, "ord_dvsn_name", "ORD_DVSN_NAME")
+        order_time = _normalize_time(_first_str(row, "ord_tmd", "ORD_TMD", "infm_tmd", "INFM_TMD"))
+
+        order_qty = _first_int(row, "ord_qty", "ORD_QTY")
+        filled_qty = _first_int(row, "tot_ccld_qty", "TOT_CCLD_QTY")
+        price = _first_int(row, "ord_unpr", "ORD_UNPR")
+
+        # 이번 버전은 실제 응답 기준으로 rmn_qty만 우선 신뢰.
+        unfilled_qty = _first_int(row, "rmn_qty", "RMN_QTY")
         if unfilled_qty <= 0 and order_qty > 0:
             unfilled_qty = max(order_qty - filled_qty, 0)
 
         return OpenOrder(
             symbol=symbol,
-            side=_infer_side(row),
-            order_no=_nullable(_first_str(row, "odno", "ODNO", "ord_no", "ORD_NO")),
-            order_time=_nullable(_first_str(row, "ord_tmd", "ORD_TMD", "order_time")),
-            order_branch=_nullable(
-                _first_str(row, "ord_gno_brno", "ORD_GNO_BRNO", "krx_fwdg_ord_orgno")
-            ),
-            order_price=_first_int(row, "ord_unpr", "ORD_UNPR", "avg_prvs", "order_price"),
+            side=side,
+            order_no=order_no,
+            order_branch_no=order_branch_no,
+            order_time=order_time,
+            order_type_name=order_type_name,
             order_qty=order_qty,
             filled_qty=filled_qty,
             unfilled_qty=unfilled_qty,
+            price=price,
             raw=row,
         )
 
     @staticmethod
     def _looks_open(row: dict[str, Any], order: OpenOrder) -> bool:
-        if order.unfilled_qty <= 0:
-            return False
-
+        # 1) 주문번호 없으면 제외
         if not order.order_no:
             return False
 
-        # Explicitly filter out terminal/closed states.
-        status_text = _first_str(
-            row,
-            "ord_sttus",
-            "ORD_STTUS",
-            "ord_sttus_name",
-            "ORD_STTUS_NAME",
-            "ccld_dvsn_name",
-            "CCLD_DVSN_NAME",
-            "rjct_rson_name",
-            "RJCT_RSON_NAME",
-        ).upper()
-
-        closed_keywords = [
-            "체결",
-            "전량체결",
-            "취소",
-            "정정",
-            "거부",
-            "거절",
-            "FILLED",
-            "CANCEL",
-            "REJECT",
-        ]
-        if any(keyword.upper() in status_text for keyword in closed_keywords):
+        # 2) 잔량이 0 이하이면 제외
+        if order.unfilled_qty <= 0:
             return False
 
+        # 3) 취소 완료면 제외
+        cncl_yn = _first_str(row, "cncl_yn", "CNCL_YN").upper()
+        if cncl_yn == "Y":
+            return False
+
+        # 4) 매수취소/매도취소 등 취소계열 문구면 제외
+        side_name = _first_str(row, "sll_buy_dvsn_cd_name", "SLL_BUY_DVSN_CD_NAME")
+        if "취소" in side_name:
+            return False
+
+        # 5) 전량 체결이면 제외
         if order.order_qty > 0 and order.filled_qty >= order.order_qty:
             return False
 
+        # 6) 이상치 제거
         if order.order_qty > 0 and order.unfilled_qty > order.order_qty:
             return False
 
         return True
 
+    @staticmethod
+    def _dedupe_by_order_no(orders: list[OpenOrder]) -> list[OpenOrder]:
+        latest_by_no: dict[str, OpenOrder] = {}
+        for order in orders:
+            prev = latest_by_no.get(order.order_no)
+            if prev is None:
+                latest_by_no[order.order_no] = order
+                continue
+            if order.order_time >= prev.order_time:
+                latest_by_no[order.order_no] = order
 
-def _infer_side(row: dict[str, Any]) -> str:
-    raw = _first_str(
-        row,
-        "sll_buy_dvsn_cd",
-        "SLL_BUY_DVSN_CD",
-        "trad_dvsn_name",
-        "trad_dvsn",
-        "trade_type",
-    )
-    normalized = raw.upper()
+        deduped = list(latest_by_no.values())
+        deduped.sort(key=lambda o: (o.order_time, o.order_no), reverse=True)
+        return deduped
 
-    if raw in {"01", "BUY", "매수"} or "매수" in raw or "BUY" in normalized:
+
+def _normalize_side(side_name: str) -> str:
+    if "매수" in side_name and "취소" not in side_name:
         return "buy"
-    if raw in {"02", "SELL", "매도"} or "매도" in raw or "SELL" in normalized:
+    if "매도" in side_name and "취소" not in side_name:
         return "sell"
-    return "buy"
+    return ""
 
 
-def _first_int(source: dict[str, Any], *keys: str) -> int:
+def _normalize_time(raw: str) -> str:
+    digits = "".join(ch for ch in raw if ch.isdigit())
+    if len(digits) == 6:
+        return digits
+    return raw.strip()
+
+
+def _first_str(row: dict[str, Any], *keys: str) -> str:
     for key in keys:
-        value = source.get(key)
-        if value is None or value == "":
-            continue
-        try:
-            return int(str(value).replace(",", ""))
-        except ValueError:
-            continue
-    return 0
-
-
-def _first_str(source: dict[str, Any], *keys: str) -> str:
-    for key in keys:
-        value = source.get(key)
+        value = row.get(key)
         if value is None:
             continue
         text = str(value).strip()
@@ -204,5 +186,16 @@ def _first_str(source: dict[str, Any], *keys: str) -> str:
     return ""
 
 
-def _nullable(value: str) -> str | None:
-    return value or None
+def _first_int(row: dict[str, Any], *keys: str) -> int:
+    for key in keys:
+        value = row.get(key)
+        if value is None:
+            continue
+        text = str(value).strip().replace(",", "")
+        if text == "":
+            continue
+        try:
+            return int(float(text))
+        except ValueError:
+            continue
+    return 0
