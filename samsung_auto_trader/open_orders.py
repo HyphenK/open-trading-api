@@ -4,7 +4,7 @@ from dataclasses import dataclass
 from typing import Any
 
 from api_client import APIClient
-from config import OPEN_ORDERS_ENDPOINT, TARGET_SYMBOL, TR_ID_OPEN_ORDERS_DEMO
+from config import OPEN_ORDERS_ENDPOINT, TARGET_SYMBOL, TR_ID_OPEN_ORDERS_DEMO, today_kst_str
 
 
 @dataclass
@@ -28,15 +28,25 @@ class OpenOrdersService:
         self.acnt_prdt_cd = acnt_prdt_cd
 
     def get_open_orders(self, symbol: str = TARGET_SYMBOL) -> list[OpenOrder]:
+        today = today_kst_str()
         params = {
             "CANO": self.cano,
             "ACNT_PRDT_CD": self.acnt_prdt_cd,
+            "INQR_STRT_DT": today,
+            "INQR_END_DT": today,
+            "SLL_BUY_DVSN_CD": "00",
+            "INQR_DVSN": "00",
+            # Query broadly, then filter in Python. This has been more reliable than
+            # requesting a single symbol directly for inquire-daily-ccld.
+            "PDNO": "",
+            "CCLD_DVSN": "00",
+            "ORD_GNO_BRNO": "",
+            "ODNO": "",
+            "INQR_DVSN_3": "00",
+            "INQR_DVSN_1": "",
+            "INQR_DVSN_2": "",
             "CTX_AREA_FK100": "",
             "CTX_AREA_NK100": "",
-            # Query all cancel/revise-possible orders, then filter in Python.
-            # This is more reliable for current live open-order state than daily fill history.
-            "INQR_DVSN_1": "0",
-            "INQR_DVSN_2": "0",
         }
 
         data = self.api_client.get(OPEN_ORDERS_ENDPOINT, TR_ID_OPEN_ORDERS_DEMO, params=params)
@@ -58,8 +68,8 @@ class OpenOrdersService:
     @staticmethod
     def _extract_rows(data: dict[str, Any]) -> list[dict[str, Any]]:
         candidates = [
-            data.get("output"),
             data.get("output1"),
+            data.get("output"),
             data.get("output2"),
         ]
         for candidate in candidates:
@@ -69,48 +79,25 @@ class OpenOrdersService:
 
     @staticmethod
     def _parse_order(row: dict[str, Any]) -> OpenOrder | None:
-        symbol = _first_str(
-            row,
-            "pdno",
-            "PDNO",
-            "ord_pdno",
-            "ORD_PDNO",
-            "shtn_pdno",
-            "SHTN_PDNO",
-        )
+        symbol = _first_str(row, "pdno", "PDNO")
         if not symbol:
             return None
 
-        order_qty = _first_int(
-            row,
-            "ord_qty",
-            "ORD_QTY",
-            "tot_ord_qty",
-            "TOT_ORD_QTY",
-            "ord_psbl_qty",
-            "ORD_PSBL_QTY",
-        )
+        order_qty = _first_int(row, "ord_qty", "ORD_QTY", "tot_ord_qty", "TOT_ORD_QTY")
         filled_qty = _first_int(
             row,
             "tot_ccld_qty",
             "TOT_CCLD_QTY",
             "ccld_qty",
             "CCLD_QTY",
-            "exec_qty",
-            "EXEC_QTY",
         )
         unfilled_qty = _first_int(
             row,
-            "nccs_qty",
-            "NCCS_QTY",
             "rmn_qty",
             "RMN_QTY",
             "tot_ccld_rmnd_qty",
             "TOT_CCLD_RMND_QTY",
             "ord_psbl_qty",
-            "ORD_PSBL_QTY",
-            "psbl_qty",
-            "PSBL_QTY",
         )
 
         if unfilled_qty <= 0 and order_qty > 0:
@@ -119,20 +106,12 @@ class OpenOrdersService:
         return OpenOrder(
             symbol=symbol,
             side=_infer_side(row),
-            order_no=_nullable(
-                _first_str(row, "odno", "ODNO", "ord_no", "ORD_NO", "orgn_odno", "ORGN_ODNO")
-            ),
-            order_time=_nullable(_first_str(row, "ord_tmd", "ORD_TMD", "order_time", "ORD_TIME")),
+            order_no=_nullable(_first_str(row, "odno", "ODNO", "ord_no", "ORD_NO")),
+            order_time=_nullable(_first_str(row, "ord_tmd", "ORD_TMD", "order_time")),
             order_branch=_nullable(
-                _first_str(
-                    row,
-                    "ord_gno_brno",
-                    "ORD_GNO_BRNO",
-                    "krx_fwdg_ord_orgno",
-                    "KRX_FWDG_ORD_ORGNO",
-                )
+                _first_str(row, "ord_gno_brno", "ORD_GNO_BRNO", "krx_fwdg_ord_orgno")
             ),
-            order_price=_first_int(row, "ord_unpr", "ORD_UNPR", "order_price", "ORDER_PRICE"),
+            order_price=_first_int(row, "ord_unpr", "ORD_UNPR", "avg_prvs", "order_price"),
             order_qty=order_qty,
             filled_qty=filled_qty,
             unfilled_qty=unfilled_qty,
@@ -146,15 +125,14 @@ def _infer_side(row: dict[str, Any]) -> str:
         "sll_buy_dvsn_cd",
         "SLL_BUY_DVSN_CD",
         "trad_dvsn_name",
-        "TRAD_DVSN_NAME",
+        "trad_dvsn",
         "trade_type",
-        "TRADE_TYPE",
     )
     normalized = raw.upper()
 
-    if raw in {"01", "1", "BUY", "매수"} or "매수" in raw or "BUY" in normalized:
+    if raw in {"01", "BUY", "매수"} or "매수" in raw or "BUY" in normalized:
         return "buy"
-    if raw in {"02", "2", "SELL", "매도"} or "매도" in raw or "SELL" in normalized:
+    if raw in {"02", "SELL", "매도"} or "매도" in raw or "SELL" in normalized:
         return "sell"
 
     return "buy"
