@@ -10,7 +10,6 @@ from dotenv import load_dotenv
 
 load_dotenv()
 
-
 BASE_DIR = Path(__file__).resolve().parent
 TOKEN_CACHE_PATH = BASE_DIR / "token_cache.json"
 LOG_DIR = BASE_DIR / "logs"
@@ -32,7 +31,8 @@ TR_ID_BALANCE_DEMO = "VTTC8434R"
 TR_ID_ORDER_BUY_DEMO = "VTTC0012U"
 TR_ID_ORDER_SELL_DEMO = "VTTC0011U"
 TR_ID_ORDER_CANCEL_DEMO = "VTTC0803U"
-TR_ID_OPEN_ORDERS_DEMO = "VTTC8001R"
+# Recent mock-trading guidance uses VTTC0081R for inquire-daily-ccld.
+TR_ID_OPEN_ORDERS_DEMO = "VTTC0081R"
 TR_ID_HASHKEY = "HASH"
 
 MARKET_DIVISION = "J"
@@ -57,6 +57,7 @@ KST = ZoneInfo("Asia/Seoul")
 TRADING_START = time(hour=9, minute=10)
 CLOSEOUT_START = time(hour=15, minute=20)
 TRADING_END = time(hour=15, minute=30)
+
 PRE_MARKET_SLEEP_SECONDS = 60
 POLL_INTERVAL_SECONDS = 20
 POST_ORDER_SETTLE_SECONDS = 5
@@ -83,6 +84,7 @@ class Credentials:
         return "01"
 
 
+
 def load_credentials() -> Credentials:
     raw_account = os.getenv("GH_ACCOUNT", "").strip()
     app_key = os.getenv("GH_APPKEY", "").strip()
@@ -99,22 +101,27 @@ def load_credentials() -> Credentials:
     return Credentials(account_no=account_no, app_key=app_key, app_secret=app_secret)
 
 
+
 def normalize_account(value: str) -> str:
     cleaned = value.strip()
     if cleaned.isdigit() and len(cleaned) == 8:
         return f"{cleaned}-01"
+
     if "-" in cleaned:
         front, back = cleaned.split("-", 1)
         if front.isdigit() and len(front) == 8 and back.isdigit() and len(back) == 2:
             return cleaned
+
     raise RuntimeError(
         "GH_ACCOUNT must be either 8 digits (example: 12345678) or 8-2 format "
         "(example: 12345678-01)."
     )
 
 
+
 def now_kst() -> datetime:
     return datetime.now(KST)
+
 
 
 def today_kst_str() -> str:
