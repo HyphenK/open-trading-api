@@ -22,7 +22,8 @@ PRICE_ENDPOINT = "/uapi/domestic-stock/v1/quotations/inquire-price"
 BALANCE_ENDPOINT = "/uapi/domestic-stock/v1/trading/inquire-balance"
 ORDER_CASH_ENDPOINT = "/uapi/domestic-stock/v1/trading/order-cash"
 ORDER_REVISE_CANCEL_ENDPOINT = "/uapi/domestic-stock/v1/trading/order-rvsecncl"
-OPEN_ORDERS_ENDPOINT = "/uapi/domestic-stock/v1/trading/inquire-daily-ccld"
+# Use the dedicated "cancel/revise-possible order inquiry" endpoint for live open-order state.
+OPEN_ORDERS_ENDPOINT = "/uapi/domestic-stock/v1/trading/inquire-psbl-rvsecncl"
 
 # These TR IDs and endpoints are isolated here so they can be adjusted easily if
 # your mock account environment uses a different mapping.
@@ -31,8 +32,8 @@ TR_ID_BALANCE_DEMO = "VTTC8434R"
 TR_ID_ORDER_BUY_DEMO = "VTTC0012U"
 TR_ID_ORDER_SELL_DEMO = "VTTC0011U"
 TR_ID_ORDER_CANCEL_DEMO = "VTTC0803U"
-# Recent mock-trading guidance uses VTTC0081R for inquire-daily-ccld.
-TR_ID_OPEN_ORDERS_DEMO = "VTTC0081R"
+# For inquire-psbl-rvsecncl, the mock-trading TR ID is typically VTTC8036R.
+TR_ID_OPEN_ORDERS_DEMO = "VTTC8036R"
 TR_ID_HASHKEY = "HASH"
 
 MARKET_DIVISION = "J"
