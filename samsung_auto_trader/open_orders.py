@@ -36,8 +36,9 @@ class OpenOrdersService:
             "INQR_END_DT": today,
             "SLL_BUY_DVSN_CD": "00",
             "INQR_DVSN": "00",
-            # Query broadly, then filter in Python. This has been more reliable than
-            # requesting a single symbol directly for inquire-daily-ccld.
+            # Query broadly, then filter in Python.
+            # This has been more reliable than requesting a single symbol directly
+            # for inquire-daily-ccld.
             "PDNO": "",
             "CCLD_DVSN": "00",
             "ORD_GNO_BRNO": "",
@@ -59,7 +60,7 @@ class OpenOrdersService:
                 continue
             if order.symbol != symbol:
                 continue
-            if order.unfilled_qty <= 0:
+            if not self._looks_open(row, order):
                 continue
             open_orders.append(order)
 
@@ -91,15 +92,15 @@ class OpenOrdersService:
             "ccld_qty",
             "CCLD_QTY",
         )
+        # Keep this strict: do not use ord_psbl_qty here.
+        # It can behave differently from true remaining quantity and create ghost orders.
         unfilled_qty = _first_int(
             row,
             "rmn_qty",
             "RMN_QTY",
             "tot_ccld_rmnd_qty",
             "TOT_CCLD_RMND_QTY",
-            "ord_psbl_qty",
         )
-
         if unfilled_qty <= 0 and order_qty > 0:
             unfilled_qty = max(order_qty - filled_qty, 0)
 
@@ -118,6 +119,49 @@ class OpenOrdersService:
             raw=row,
         )
 
+    @staticmethod
+    def _looks_open(row: dict[str, Any], order: OpenOrder) -> bool:
+        if order.unfilled_qty <= 0:
+            return False
+
+        if not order.order_no:
+            return False
+
+        # Explicitly filter out terminal/closed states.
+        status_text = _first_str(
+            row,
+            "ord_sttus",
+            "ORD_STTUS",
+            "ord_sttus_name",
+            "ORD_STTUS_NAME",
+            "ccld_dvsn_name",
+            "CCLD_DVSN_NAME",
+            "rjct_rson_name",
+            "RJCT_RSON_NAME",
+        ).upper()
+
+        closed_keywords = [
+            "체결",
+            "전량체결",
+            "취소",
+            "정정",
+            "거부",
+            "거절",
+            "FILLED",
+            "CANCEL",
+            "REJECT",
+        ]
+        if any(keyword.upper() in status_text for keyword in closed_keywords):
+            return False
+
+        if order.order_qty > 0 and order.filled_qty >= order.order_qty:
+            return False
+
+        if order.order_qty > 0 and order.unfilled_qty > order.order_qty:
+            return False
+
+        return True
+
 
 def _infer_side(row: dict[str, Any]) -> str:
     raw = _first_str(
@@ -134,7 +178,6 @@ def _infer_side(row: dict[str, Any]) -> str:
         return "buy"
     if raw in {"02", "SELL", "매도"} or "매도" in raw or "SELL" in normalized:
         return "sell"
-
     return "buy"
 
 
