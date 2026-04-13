@@ -197,15 +197,31 @@ class SamsungTrader:
         self._log_status_block(before_snapshot, open_orders)
 
         effective_position = self._effective_position(before_snapshot, open_orders)
+        holding_qty = self._holding_qty(before_snapshot)
         buy_open_qty, _ = self._open_order_qtys(open_orders)
 
+        max_guard_triggered = False
         if effective_position >= MAX_POSITION and buy_open_qty > 0:
-            self.logger.info(
-                "Max position guard triggered. Cancelling open buy orders before skipping buys | effective_position=%s max=%s buy_open_qty=%s",
+            self.logger.warning(
+                "Max position guard triggered by effective position. Cancelling all open buy orders | holding_qty=%s effective_position=%s max=%s buy_open_qty=%s",
+                holding_qty,
                 effective_position,
                 MAX_POSITION,
                 buy_open_qty,
             )
+            max_guard_triggered = True
+
+        if holding_qty > MAX_POSITION and buy_open_qty > 0:
+            self.logger.warning(
+                "Max position guard triggered by holding quantity overflow. Cancelling all open buy orders | holding_qty=%s effective_position=%s max=%s buy_open_qty=%s",
+                holding_qty,
+                effective_position,
+                MAX_POSITION,
+                buy_open_qty,
+            )
+            max_guard_triggered = True
+
+        if max_guard_triggered:
             self._cancel_open_orders([order for order in open_orders if order.side == "buy"])
             self.logger.info("Waiting %s seconds after max-guard buy-order cancels.", POST_CANCEL_SETTLE_SECONDS)
             time.sleep(POST_CANCEL_SETTLE_SECONDS)
