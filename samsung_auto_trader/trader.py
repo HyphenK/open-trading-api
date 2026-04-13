@@ -1,8 +1,10 @@
+
 from __future__ import annotations
 
 import logging
 import time
 from dataclasses import asdict
+from typing import Any
 
 from account import AccountService, AccountSnapshot
 from config import (
@@ -25,7 +27,13 @@ from config import (
 )
 from market_data import MarketDataService
 from open_orders import OpenOrder, OpenOrdersService
-from orders import OrderResult, OrderService, get_kospi_tick_size, round_price_down_to_tick, round_price_up_to_tick
+from orders import (
+    OrderResult,
+    OrderService,
+    get_kospi_tick_size,
+    round_price_down_to_tick,
+    round_price_up_to_tick,
+)
 
 
 class SamsungTrader:
@@ -44,7 +52,7 @@ class SamsungTrader:
         self.logger = logger
         self._initialized_today = False
         self._closeout_done_today = False
-        self._last_trading_day = None
+        self._last_trading_day: str | None = None
 
     def run(self) -> None:
         self.logger.info("Trader booted for %s (%s).", TARGET_NAME, TARGET_SYMBOL)
@@ -71,24 +79,28 @@ class SamsungTrader:
                 )
                 return
 
-            if not self._initialized_today:
-                self._initialize_inventory()
-                self._initialized_today = True
+            try:
+                if not self._initialized_today:
+                    self._initialize_inventory()
+                    self._initialized_today = True
 
-            if now_t >= CLOSEOUT_START and not self._closeout_done_today:
-                self._run_closeout()
-                self._closeout_done_today = True
-                time.sleep(POLL_INTERVAL_SECONDS)
-                continue
+                if now_t >= CLOSEOUT_START and not self._closeout_done_today:
+                    self._run_closeout()
+                    self._closeout_done_today = True
+                    time.sleep(POLL_INTERVAL_SECONDS)
+                    continue
 
-            if self._closeout_done_today:
-                self.logger.info(
-                    "Closeout already completed for today. Waiting until end of trading window."
-                )
-                time.sleep(POLL_INTERVAL_SECONDS)
-                continue
+                if self._closeout_done_today:
+                    self.logger.info(
+                        "Closeout already completed for today. Waiting until end of trading window."
+                    )
+                    time.sleep(POLL_INTERVAL_SECONDS)
+                    continue
 
-            self._run_cycle()
+                self._run_cycle()
+            except Exception as exc:
+                self.logger.exception("Cycle failed but trader will continue: %s", exc)
+
             time.sleep(POLL_INTERVAL_SECONDS)
 
     def _roll_daily_flags_if_needed(self, trading_day: str) -> None:
@@ -105,6 +117,7 @@ class SamsungTrader:
             MIN_POSITION,
             MAX_POSITION,
         )
+
         snapshot = self.account.get_snapshot(TARGET_SYMBOL)
         open_orders = self._get_open_orders_safe(TARGET_SYMBOL)
         self._log_snapshot("Holdings before bootstrap", snapshot)
@@ -117,12 +130,15 @@ class SamsungTrader:
         holding_qty = self._holding_qty(snapshot)
         shortage = max(INITIAL_POSITION - holding_qty, 0)
         if shortage <= 0:
-            self.logger.info("Bootstrap skipped: current holding already meets initial position target.")
+            self.logger.info(
+                "Bootstrap skipped: current holding already meets initial position target."
+            )
             return
 
         current_price = self.market_data.get_current_price(TARGET_SYMBOL)
         affordable_qty = self._affordable_qty(snapshot, current_price)
         buy_qty = min(shortage, affordable_qty)
+
         if buy_qty <= 0:
             self.logger.info(
                 "Bootstrap skipped: insufficient cash for market buy | holding_qty=%s shortage=%s cash_available=%s current_price=%s",
@@ -144,8 +160,13 @@ class SamsungTrader:
         )
         result = self.orders.place_buy_market(TARGET_SYMBOL, buy_qty)
         self._log_order_result(result)
-        self.logger.info("Waiting %s seconds before bootstrap balance check.", POST_ORDER_SETTLE_SECONDS)
+
+        self.logger.info(
+            "Waiting %s seconds before bootstrap balance check.",
+            POST_ORDER_SETTLE_SECONDS,
+        )
         time.sleep(POST_ORDER_SETTLE_SECONDS)
+
         after_snapshot = self.account.get_snapshot(TARGET_SYMBOL)
         after_open_orders = self._get_open_orders_safe(TARGET_SYMBOL)
         self._log_snapshot("Holdings after bootstrap", after_snapshot)
@@ -157,18 +178,23 @@ class SamsungTrader:
             "Closeout window started at %s KST. Cancelling open orders and liquidating sellable shares.",
             CLOSEOUT_START.strftime("%H:%M"),
         )
+
         open_orders = self._get_open_orders_safe(TARGET_SYMBOL)
         if open_orders:
             self._cancel_open_orders(open_orders)
         else:
             self.logger.info("No open orders to cancel during closeout.")
 
-        self.logger.info("Waiting %s seconds after cancel requests.", POST_CANCEL_SETTLE_SECONDS)
+        self.logger.info(
+            "Waiting %s seconds after cancel requests.",
+            POST_CANCEL_SETTLE_SECONDS,
+        )
         time.sleep(POST_CANCEL_SETTLE_SECONDS)
 
         snapshot = self.account.get_snapshot(TARGET_SYMBOL)
         self._log_snapshot("Holdings before closeout liquidation", snapshot)
         self._log_status_block(snapshot, self._get_open_orders_safe(TARGET_SYMBOL))
+
         sell_qty = self._sell_qty_for_closeout(snapshot)
         if sell_qty <= 0:
             self.logger.info("Closeout liquidation skipped: no sellable quantity.")
@@ -177,8 +203,13 @@ class SamsungTrader:
         self.logger.info("Closeout market sell request | qty=%s", sell_qty)
         result = self.orders.place_sell_market(TARGET_SYMBOL, sell_qty)
         self._log_order_result(result)
-        self.logger.info("Waiting %s seconds before closeout balance check.", POST_ORDER_SETTLE_SECONDS)
+
+        self.logger.info(
+            "Waiting %s seconds before closeout balance check.",
+            POST_ORDER_SETTLE_SECONDS,
+        )
         time.sleep(POST_ORDER_SETTLE_SECONDS)
+
         after_snapshot = self.account.get_snapshot(TARGET_SYMBOL)
         self._log_snapshot("Holdings after closeout liquidation", after_snapshot)
         self._log_status_block(after_snapshot, self._get_open_orders_safe(TARGET_SYMBOL))
@@ -189,7 +220,11 @@ class SamsungTrader:
 
         current_price = self.market_data.get_current_price(TARGET_SYMBOL)
         tick_size = get_kospi_tick_size(current_price)
-        self.logger.info("Current price: %s KRW | inferred_tick_size=%s", current_price, tick_size)
+        self.logger.info(
+            "Current price: %s KRW | inferred_tick_size=%s",
+            current_price,
+            tick_size,
+        )
 
         before_snapshot = self.account.get_snapshot(TARGET_SYMBOL)
         open_orders = self._get_open_orders_safe(TARGET_SYMBOL)
@@ -223,8 +258,12 @@ class SamsungTrader:
 
         if max_guard_triggered:
             self._cancel_open_orders([order for order in open_orders if order.side == "buy"])
-            self.logger.info("Waiting %s seconds after max-guard buy-order cancels.", POST_CANCEL_SETTLE_SECONDS)
+            self.logger.info(
+                "Waiting %s seconds after max-guard buy-order cancels.",
+                POST_CANCEL_SETTLE_SECONDS,
+            )
             time.sleep(POST_CANCEL_SETTLE_SECONDS)
+
             before_snapshot = self.account.get_snapshot(TARGET_SYMBOL)
             open_orders = self._get_open_orders_safe(TARGET_SYMBOL)
             self._log_snapshot("Holdings after max-guard cancel", before_snapshot)
@@ -232,7 +271,10 @@ class SamsungTrader:
             effective_position = self._effective_position(before_snapshot, open_orders)
 
         if open_orders:
-            self.logger.info("Open orders detected for %s. Skipping new orders this cycle.", TARGET_SYMBOL)
+            self.logger.info(
+                "Open orders detected for %s. Skipping new orders this cycle.",
+                TARGET_SYMBOL,
+            )
             self.logger.info("Trade cycle finished.")
             return
 
@@ -240,7 +282,6 @@ class SamsungTrader:
         raw_sell_price = current_price + SELL_OFFSET_KRW
         buy_price = max(1, round_price_down_to_tick(raw_buy_price))
         sell_price = round_price_up_to_tick(raw_sell_price)
-
         self.logger.info(
             "Price normalized by tick size | current=%s tick=%s raw_buy=%s buy=%s raw_sell=%s sell=%s",
             current_price,
@@ -252,13 +293,30 @@ class SamsungTrader:
         )
 
         working_snapshot = before_snapshot
+
         buy_qty = self._buy_qty_for_cycle(before_snapshot, [], buy_price)
         if buy_qty > 0:
             self.logger.info("Buy order request: qty=%s, price=%s", buy_qty, buy_price)
-            buy_result = self.orders.place_buy_limit(TARGET_SYMBOL, buy_qty, buy_price)
-            self._log_order_result(buy_result)
-            self.logger.info("Waiting %s seconds before post-buy balance check.", POST_ORDER_SETTLE_SECONDS)
+            try:
+                buy_result = self.orders.place_buy_limit(TARGET_SYMBOL, buy_qty, buy_price)
+                self._log_order_result(buy_result)
+            except RuntimeError as exc:
+                msg = str(exc)
+                if "40250000" in msg:
+                    self.logger.warning(
+                        "Buy order skipped: insufficient orderable amount. error=%s",
+                        msg,
+                    )
+                    self.logger.info("Trade cycle finished.")
+                    return
+                raise
+
+            self.logger.info(
+                "Waiting %s seconds before post-buy balance check.",
+                POST_ORDER_SETTLE_SECONDS,
+            )
             time.sleep(POST_ORDER_SETTLE_SECONDS)
+
             after_buy = self.account.get_snapshot(TARGET_SYMBOL)
             after_buy_open_orders = self._get_open_orders_safe(TARGET_SYMBOL)
             self._log_snapshot("Holdings after buy", after_buy)
@@ -283,10 +341,26 @@ class SamsungTrader:
                 self._sellable_qty(working_snapshot),
                 MIN_POSITION,
             )
-            sell_result = self.orders.place_sell_limit(TARGET_SYMBOL, sell_qty, sell_price)
-            self._log_order_result(sell_result)
-            self.logger.info("Waiting %s seconds before post-sell balance check.", POST_ORDER_SETTLE_SECONDS)
+            try:
+                sell_result = self.orders.place_sell_limit(TARGET_SYMBOL, sell_qty, sell_price)
+                self._log_order_result(sell_result)
+            except RuntimeError as exc:
+                msg = str(exc)
+                if "40240000" in msg:
+                    self.logger.warning(
+                        "Sell order skipped: no sellable balance. error=%s",
+                        msg,
+                    )
+                    self.logger.info("Trade cycle finished.")
+                    return
+                raise
+
+            self.logger.info(
+                "Waiting %s seconds before post-sell balance check.",
+                POST_ORDER_SETTLE_SECONDS,
+            )
             time.sleep(POST_ORDER_SETTLE_SECONDS)
+
             after_sell = self.account.get_snapshot(TARGET_SYMBOL)
             after_sell_open_orders = self._get_open_orders_safe(TARGET_SYMBOL)
             self._log_snapshot("Holdings after sell", after_sell)
@@ -303,23 +377,29 @@ class SamsungTrader:
     def _cancel_open_orders(self, open_orders: list[OpenOrder]) -> None:
         for order in open_orders:
             if not order.order_no:
-                self.logger.warning("Skipping cancel for open order without order number: %s", order)
+                self.logger.warning(
+                    "Skipping cancel for open order without order number: %s",
+                    order,
+                )
                 continue
+
+            order_branch = self._get_order_branch(order)
+            order_price = self._get_order_price(order)
             self.logger.info(
                 "Cancel order request | order_no=%s branch=%s side=%s unfilled_qty=%s price=%s",
                 order.order_no,
-                order.order_branch,
+                order_branch,
                 order.side,
                 order.unfilled_qty,
-                order.order_price,
+                order_price,
             )
             try:
                 self.orders.cancel_order(
                     TARGET_SYMBOL,
                     order.order_no,
-                    order.order_branch,
+                    order_branch,
                     order.unfilled_qty,
-                    order.order_price,
+                    order_price,
                 )
             except Exception as exc:
                 self.logger.warning("Cancel order failed for %s: %s", order.order_no, exc)
@@ -328,7 +408,10 @@ class SamsungTrader:
         try:
             return self.open_orders.get_open_orders(symbol)
         except Exception as exc:
-            self.logger.error("Open-order inquiry failed; blocking new orders this cycle: %s", exc)
+            self.logger.error(
+                "Open-order inquiry failed; blocking new orders this cycle: %s",
+                exc,
+            )
             raise
 
     @staticmethod
@@ -362,14 +445,21 @@ class SamsungTrader:
         buy_open, sell_open = self._open_order_qtys(open_orders)
         return holding_qty + buy_open - sell_open
 
-    def _buy_qty_for_cycle(self, snapshot: AccountSnapshot, open_orders: list[OpenOrder], buy_price: int) -> int:
+    def _buy_qty_for_cycle(
+        self,
+        snapshot: AccountSnapshot,
+        open_orders: list[OpenOrder],
+        buy_price: int,
+    ) -> int:
         effective_position = self._effective_position(snapshot, open_orders)
         room = max(MAX_POSITION - effective_position, 0)
         if room <= 0:
             return 0
+
         affordable = self._affordable_qty(snapshot, buy_price)
         if affordable <= 0:
             return 0
+
         return min(DEFAULT_ORDER_QTY, room, affordable)
 
     def _sell_qty_for_cycle(self, snapshot: AccountSnapshot) -> int:
@@ -410,16 +500,33 @@ class SamsungTrader:
         if open_orders:
             for order in open_orders:
                 lines.append(
-                    "  - "
+                    " - "
                     f"side={order.side} order_no={order.order_no} time={order.order_time} "
                     f"qty={order.order_qty} filled={order.filled_qty} unfilled={order.unfilled_qty} "
-                    f"price={order.order_price} branch={order.order_branch}"
+                    f"price={self._get_order_price(order)} branch={self._get_order_branch(order)}"
                 )
         else:
-            lines.append("  - no open orders")
+            lines.append(" - no open orders")
 
         lines.append("=" * 68)
         self.logger.info("\n%s", "\n".join(lines))
+
+    @staticmethod
+    def _get_order_price(order: OpenOrder) -> int:
+        value: Any = getattr(order, "order_price", None)
+        if value is None:
+            value = getattr(order, "price", 0)
+        try:
+            return int(value or 0)
+        except (TypeError, ValueError):
+            return 0
+
+    @staticmethod
+    def _get_order_branch(order: OpenOrder) -> str:
+        value: Any = getattr(order, "order_branch", None)
+        if value in (None, ""):
+            value = getattr(order, "branch", "")
+        return str(value or "")
 
     def _log_order_result(self, result: OrderResult) -> None:
         self.logger.info(
@@ -434,8 +541,8 @@ class SamsungTrader:
     def _log_execution_guess(self, side: str, before: AccountSnapshot, after: AccountSnapshot) -> None:
         before_qty = before.holding.qty if before.holding else 0
         after_qty = after.holding.qty if after.holding else 0
-
         executed = False
+
         if side == "buy" and after_qty > before_qty:
             executed = True
         if side == "sell" and after_qty < before_qty:
