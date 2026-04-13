@@ -1,40 +1,55 @@
 from __future__ import annotations
 
 import json
-from datetime import datetime
-from zoneinfo import ZoneInfo
 
-from dotenv import load_dotenv
-
-from auth import AuthManager
+from account import AccountService
 from api_client import APIClient
+from auth import AuthManager
 from config import (
+    MOCK_BASE_URL,
     OPEN_ORDERS_ENDPOINT,
-    TR_ID_OPEN_ORDERS_DEMO,
     TARGET_SYMBOL,
+    TR_ID_OPEN_ORDERS_DEMO,
+    load_credentials,
+    today_kst_str,
 )
-from logger import get_logger
-
-
-KST = ZoneInfo("Asia/Seoul")
-
-
-def today_kst() -> str:
-    return datetime.now(KST).strftime("%Y%m%d")
+from logger import setup_logging
 
 
 def main() -> None:
-    load_dotenv()
-    logger = get_logger()
+    logger = setup_logging()
+    credentials = load_credentials()
 
-    auth = AuthManager(logger=logger)
-    api_client = APIClient(auth_manager=auth, logger=logger)
+    logger.info(
+        "Loaded credentials for account ending with %s",
+        credentials.account_no[-2:],
+    )
 
-    today = today_kst()
+    auth_manager = AuthManager(
+        base_url=MOCK_BASE_URL,
+        app_key=credentials.app_key,
+        app_secret=credentials.app_secret,
+        logger=logger,
+    )
+
+    api_client = APIClient(
+        base_url=MOCK_BASE_URL,
+        auth_manager=auth_manager,
+        logger=logger,
+    )
+
+    # account.py와 동일한 계좌 분리 기준 사용
+    account_service = AccountService(
+        api_client,
+        credentials.cano,
+        credentials.acnt_prdt_cd,
+    )
+
+    today = today_kst_str()
 
     params = {
-        "CANO": auth.cano,
-        "ACNT_PRDT_CD": auth.acnt_prdt_cd,
+        "CANO": credentials.cano,
+        "ACNT_PRDT_CD": credentials.acnt_prdt_cd,
         "INQR_STRT_DT": today,
         "INQR_END_DT": today,
         "SLL_BUY_DVSN_CD": "00",
@@ -80,7 +95,11 @@ def main() -> None:
         print("\n[output1 first row keys]")
         print(sorted(output1[0].keys()))
 
-    samsung_rows = [row for row in output1 if str(row.get("pdno", "")).strip() == TARGET_SYMBOL]
+    samsung_rows = [
+        row
+        for row in output1
+        if str(row.get("pdno", "")).strip() == TARGET_SYMBOL
+    ]
 
     print("\n" + "=" * 100)
     print(f"SAMSUNG ({TARGET_SYMBOL}) ROW COUNT = {len(samsung_rows)}")
@@ -94,14 +113,15 @@ def main() -> None:
         pdno = row.get("pdno")
         odno = row.get("odno")
         ord_tmd = row.get("ord_tmd")
-        sll_buy_dvsn_cd_name = row.get("sll_buy_dvsn_cd_name")
+        side_name = row.get("sll_buy_dvsn_cd_name")
         ord_qty = row.get("ord_qty")
         tot_ccld_qty = row.get("tot_ccld_qty")
         rmn_qty = row.get("rmn_qty")
         tot_ccld_rmnd_qty = row.get("tot_ccld_rmnd_qty")
         ord_unpr = row.get("ord_unpr")
+
         print(
-            f"[{i}] pdno={pdno} odno={odno} time={ord_tmd} side={sll_buy_dvsn_cd_name} "
+            f"[{i}] pdno={pdno} odno={odno} time={ord_tmd} side={side_name} "
             f"ord_qty={ord_qty} filled={tot_ccld_qty} "
             f"rmn_qty={rmn_qty} tot_ccld_rmnd_qty={tot_ccld_rmnd_qty} price={ord_unpr}"
         )
