@@ -1,4 +1,3 @@
-
 from __future__ import annotations
 
 import logging
@@ -106,6 +105,7 @@ class SamsungTrader:
     def _roll_daily_flags_if_needed(self, trading_day: str) -> None:
         if self._last_trading_day == trading_day:
             return
+
         self._last_trading_day = trading_day
         self._initialized_today = False
         self._closeout_done_today = False
@@ -117,7 +117,6 @@ class SamsungTrader:
             MIN_POSITION,
             MAX_POSITION,
         )
-
         snapshot = self.account.get_snapshot(TARGET_SYMBOL)
         open_orders = self._get_open_orders_safe(TARGET_SYMBOL)
         self._log_snapshot("Holdings before bootstrap", snapshot)
@@ -129,6 +128,7 @@ class SamsungTrader:
 
         holding_qty = self._holding_qty(snapshot)
         shortage = max(INITIAL_POSITION - holding_qty, 0)
+
         if shortage <= 0:
             self.logger.info(
                 "Bootstrap skipped: current holding already meets initial position target."
@@ -141,7 +141,8 @@ class SamsungTrader:
 
         if buy_qty <= 0:
             self.logger.info(
-                "Bootstrap skipped: insufficient cash for market buy | holding_qty=%s shortage=%s cash_available=%s current_price=%s",
+                "Bootstrap skipped: insufficient cash for market buy | "
+                "holding_qty=%s shortage=%s cash_available=%s current_price=%s",
                 holding_qty,
                 shortage,
                 snapshot.cash_available,
@@ -150,7 +151,8 @@ class SamsungTrader:
             return
 
         self.logger.info(
-            "Bootstrap market buy request | current_holding=%s target_initial=%s shortage=%s affordable=%s buy_qty=%s est_price=%s",
+            "Bootstrap market buy request | current_holding=%s target_initial=%s "
+            "shortage=%s affordable=%s buy_qty=%s est_price=%s",
             holding_qty,
             INITIAL_POSITION,
             shortage,
@@ -175,10 +177,10 @@ class SamsungTrader:
 
     def _run_closeout(self) -> None:
         self.logger.info(
-            "Closeout window started at %s KST. Cancelling open orders and liquidating sellable shares.",
+            "Closeout window started at %s KST. Cancelling open orders and "
+            "liquidating sellable shares.",
             CLOSEOUT_START.strftime("%H:%M"),
         )
-
         open_orders = self._get_open_orders_safe(TARGET_SYMBOL)
         if open_orders:
             self._cancel_open_orders(open_orders)
@@ -233,12 +235,14 @@ class SamsungTrader:
 
         effective_position = self._effective_position(before_snapshot, open_orders)
         holding_qty = self._holding_qty(before_snapshot)
-        buy_open_qty, _ = self._open_order_qtys(open_orders)
+        buy_open_qty, sell_open_qty = self._open_order_qtys(open_orders)
 
         max_guard_triggered = False
         if effective_position >= MAX_POSITION and buy_open_qty > 0:
             self.logger.warning(
-                "Max position guard triggered by effective position. Cancelling all open buy orders | holding_qty=%s effective_position=%s max=%s buy_open_qty=%s",
+                "Max position guard triggered by effective position. "
+                "Cancelling all open buy orders | holding_qty=%s "
+                "effective_position=%s max=%s buy_open_qty=%s",
                 holding_qty,
                 effective_position,
                 MAX_POSITION,
@@ -248,7 +252,9 @@ class SamsungTrader:
 
         if holding_qty > MAX_POSITION and buy_open_qty > 0:
             self.logger.warning(
-                "Max position guard triggered by holding quantity overflow. Cancelling all open buy orders | holding_qty=%s effective_position=%s max=%s buy_open_qty=%s",
+                "Max position guard triggered by holding quantity overflow. "
+                "Cancelling all open buy orders | holding_qty=%s "
+                "effective_position=%s max=%s buy_open_qty=%s",
                 holding_qty,
                 effective_position,
                 MAX_POSITION,
@@ -269,21 +275,16 @@ class SamsungTrader:
             self._log_snapshot("Holdings after max-guard cancel", before_snapshot)
             self._log_status_block(before_snapshot, open_orders)
             effective_position = self._effective_position(before_snapshot, open_orders)
-
-        if open_orders:
-            self.logger.info(
-                "Open orders detected for %s. Skipping new orders this cycle.",
-                TARGET_SYMBOL,
-            )
-            self.logger.info("Trade cycle finished.")
-            return
+            holding_qty = self._holding_qty(before_snapshot)
+            buy_open_qty, sell_open_qty = self._open_order_qtys(open_orders)
 
         raw_buy_price = max(1, current_price - BUY_OFFSET_KRW)
         raw_sell_price = current_price + SELL_OFFSET_KRW
         buy_price = max(1, round_price_down_to_tick(raw_buy_price))
         sell_price = round_price_up_to_tick(raw_sell_price)
         self.logger.info(
-            "Price normalized by tick size | current=%s tick=%s raw_buy=%s buy=%s raw_sell=%s sell=%s",
+            "Price normalized by tick size | current=%s tick=%s raw_buy=%s buy=%s "
+            "raw_sell=%s sell=%s",
             current_price,
             tick_size,
             raw_buy_price,
@@ -292,9 +293,28 @@ class SamsungTrader:
             sell_price,
         )
 
+        max_buy_reached = (holding_qty + buy_open_qty) >= MAX_POSITION
+        min_sell_reached = (holding_qty - sell_open_qty) <= MIN_POSITION
+
+        if max_buy_reached:
+            self.logger.info(
+                "Skipping buy this cycle | holding_qty=%s buy_open=%s max_position=%s",
+                holding_qty,
+                buy_open_qty,
+                MAX_POSITION,
+            )
+
+        if min_sell_reached:
+            self.logger.info(
+                "Skipping sell this cycle | holding_qty=%s sell_open=%s min_position=%s",
+                holding_qty,
+                sell_open_qty,
+                MIN_POSITION,
+            )
+
         working_snapshot = before_snapshot
 
-        buy_qty = self._buy_qty_for_cycle(before_snapshot, [], buy_price)
+        buy_qty = 0 if max_buy_reached else self._buy_qty_for_cycle(before_snapshot, open_orders, buy_price)
         if buy_qty > 0:
             self.logger.info("Buy order request: qty=%s, price=%s", buy_qty, buy_price)
             try:
@@ -325,12 +345,29 @@ class SamsungTrader:
             working_snapshot = after_buy
         else:
             self.logger.info(
-                "Buy order skipped: max position reached, open buy exposure already counted, or available cash was not enough | holding_qty=%s effective_position=%s cash_available=%s max_position=%s",
+                "Buy order skipped: max position reached, open buy exposure already counted, "
+                "or available cash was not enough | holding_qty=%s effective_position=%s "
+                "cash_available=%s max_position=%s",
                 self._holding_qty(before_snapshot),
                 effective_position,
                 before_snapshot.cash_available,
                 MAX_POSITION,
             )
+
+        latest_open_orders = self._get_open_orders_safe(TARGET_SYMBOL)
+        latest_holding_qty = self._holding_qty(working_snapshot)
+        _, latest_sell_open_qty = self._open_order_qtys(latest_open_orders)
+        latest_min_sell_reached = (latest_holding_qty - latest_sell_open_qty) <= MIN_POSITION
+
+        if latest_min_sell_reached:
+            self.logger.info(
+                "Skipping sell this cycle | holding_qty=%s sell_open=%s min_position=%s",
+                latest_holding_qty,
+                latest_sell_open_qty,
+                MIN_POSITION,
+            )
+            self.logger.info("Trade cycle finished.")
+            return
 
         sell_qty = self._sell_qty_for_cycle(working_snapshot)
         if sell_qty > 0:
@@ -368,7 +405,8 @@ class SamsungTrader:
             self._log_execution_guess("sell", working_snapshot, after_sell)
         else:
             self.logger.info(
-                "Sell order skipped: no sellable Samsung shares above minimum inventory floor. holding=%s",
+                "Sell order skipped: no sellable Samsung shares above minimum inventory floor. "
+                "holding=%s",
                 asdict(working_snapshot.holding) if working_snapshot.holding else None,
             )
 
@@ -385,8 +423,10 @@ class SamsungTrader:
 
             order_branch = self._get_order_branch(order)
             order_price = self._get_order_price(order)
+
             self.logger.info(
-                "Cancel order request | order_no=%s branch=%s side=%s unfilled_qty=%s price=%s",
+                "Cancel order request | order_no=%s branch=%s side=%s "
+                "unfilled_qty=%s price=%s",
                 order.order_no,
                 order_branch,
                 order.side,
