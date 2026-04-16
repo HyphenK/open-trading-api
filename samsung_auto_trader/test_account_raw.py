@@ -6,7 +6,7 @@ from auth import AuthManager
 from api_client import APIClient
 from config import (
     MOCK_BASE_URL,
-    TR_ID_BALANCE,
+    TR_ID_BALANCE_ENDPOINT,
     load_credentials,
 )
 from logger import setup_logging
