@@ -34,7 +34,8 @@ class OpenOrdersService:
 
     def get_open_orders(self, symbol: str = TARGET_SYMBOL) -> list[OpenOrder]:
         today = today_kst_str()
-        params = {
+
+        base_params = {
             "CANO": self.cano,
             "ACNT_PRDT_CD": self.acnt_prdt_cd,
             "INQR_STRT_DT": today,
@@ -48,17 +49,9 @@ class OpenOrdersService:
             "INQR_DVSN_3": "00",
             "INQR_DVSN_1": "",
             "INQR_DVSN_2": "",
-            "CTX_AREA_FK100": "",
-            "CTX_AREA_NK100": "",
         }
 
-        data = self.api_client.get(
-            OPEN_ORDERS_ENDPOINT,
-            TR_ID_OPEN_ORDERS_DEMO,
-            params=params,
-        )
-
-        rows = data.get("output1", []) or []
+        rows = self._fetch_all_rows(base_params)
         open_orders: list[OpenOrder] = []
 
         for row in rows:
@@ -72,6 +65,46 @@ class OpenOrdersService:
             open_orders.append(order)
 
         return self._dedupe_by_order_no(open_orders)
+
+    def _fetch_all_rows(self, base_params: dict[str, str]) -> list[dict[str, Any]]:
+        all_rows: list[dict[str, Any]] = []
+        seen_tokens: set[tuple[str, str]] = set()
+
+        ctx_fk100 = ""
+        ctx_nk100 = ""
+
+        while True:
+            params = {
+                **base_params,
+                "CTX_AREA_FK100": ctx_fk100,
+                "CTX_AREA_NK100": ctx_nk100,
+            }
+
+            data = self.api_client.get(
+                OPEN_ORDERS_ENDPOINT,
+                TR_ID_OPEN_ORDERS_DEMO,
+                params=params,
+            )
+
+            rows = data.get("output1", []) or []
+            all_rows.extend(rows)
+
+            next_fk100 = str(data.get("ctx_area_fk100") or "").strip()
+            next_nk100 = str(data.get("ctx_area_nk100") or "").strip()
+            token = (next_fk100, next_nk100)
+
+            if not rows:
+                break
+            if not next_nk100:
+                break
+            if token in seen_tokens:
+                break
+
+            seen_tokens.add(token)
+            ctx_fk100 = next_fk100
+            ctx_nk100 = next_nk100
+
+        return all_rows
 
     @staticmethod
     def _parse_order(row: dict[str, Any]) -> OpenOrder | None:
@@ -112,35 +145,28 @@ class OpenOrdersService:
 
     @staticmethod
     def _looks_open(row: dict[str, Any], order: OpenOrder) -> bool:
-        # 1) 주문번호 없으면 제외
         if not order.order_no:
             return False
 
-        # 2) 취소 완료면 제외
         cncl_yn = _first_str(row, "cncl_yn", "CNCL_YN").upper()
         if cncl_yn == "Y":
             return False
 
-        # 3) 매수취소/매도취소 등 취소계열 문구면 제외
         side_name = _first_str(row, "sll_buy_dvsn_cd_name", "SLL_BUY_DVSN_CD_NAME")
         if "취소" in side_name:
             return False
 
-        # 4) 주문수량이 없으면 제외
         if order.order_qty <= 0:
             return False
 
-        # 5) 전량 체결이면 제외
         if order.filled_qty >= order.order_qty:
             return False
 
-        # 6) 이상치 제거
         if order.filled_qty < 0:
             return False
         if order.filled_qty > order.order_qty:
             return False
 
-        # 7) 부분체결 또는 미체결만 통과
         return True
 
     @staticmethod
