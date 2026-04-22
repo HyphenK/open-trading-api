@@ -42,7 +42,7 @@ class OpenOrdersService:
             "INQR_END_DT": today,
             "SLL_BUY_DVSN_CD": "00",
             "INQR_DVSN": "00",
-            "PDNO": "",  # 전체 조회 후 파이썬에서 종목 필터링
+            "PDNO": "",
             "CCLD_DVSN": "00",
             "ORD_GNO_BRNO": "",
             "ODNO": "",
@@ -52,9 +52,15 @@ class OpenOrdersService:
         }
 
         rows = self._fetch_all_rows(base_params)
+        cancelled_origin_order_nos = self._collect_cancelled_origin_order_nos(rows)
+
         open_orders: list[OpenOrder] = []
 
         for row in rows:
+            odno = _first_str(row, "odno", "ODNO")
+            if odno in cancelled_origin_order_nos:
+                continue
+
             order = self._parse_order(row)
             if order is None:
                 continue
@@ -62,6 +68,7 @@ class OpenOrdersService:
                 continue
             if not self._looks_open(row, order):
                 continue
+
             open_orders.append(order)
 
         return self._dedupe_by_order_no(open_orders)
@@ -105,6 +112,20 @@ class OpenOrdersService:
             ctx_nk100 = next_nk100
 
         return all_rows
+
+    @staticmethod
+    def _collect_cancelled_origin_order_nos(rows: list[dict[str, Any]]) -> set[str]:
+        cancelled: set[str] = set()
+
+        for row in rows:
+            cncl_yn = _first_str(row, "cncl_yn", "CNCL_YN").upper()
+            side_name = _first_str(row, "sll_buy_dvsn_cd_name", "SLL_BUY_DVSN_CD_NAME")
+            orgn_odno = _first_str(row, "orgn_odno", "ORGN_ODNO")
+
+            if (cncl_yn == "Y" or "취소" in side_name) and orgn_odno and orgn_odno != "0000000000":
+                cancelled.add(orgn_odno)
+
+        return cancelled
 
     @staticmethod
     def _parse_order(row: dict[str, Any]) -> OpenOrder | None:
